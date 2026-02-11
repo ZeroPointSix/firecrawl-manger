@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: "postgres:16-alpine"
+    environment:
+      POSTGRES_USER: "fcam"
+      POSTGRES_PASSWORD: "fcam_password"
+      POSTGRES_DB: "fcam"
+    volumes:
+      - "pgdata:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fcam -d fcam"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: "redis:7-alpine"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  fcam_api:
+    build: "."
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    environment:
+      FCAM_SERVER__PORT: "8000"
+      FCAM_SERVER__ENABLE_DATA_PLANE: "true"
+      FCAM_SERVER__ENABLE_CONTROL_PLANE: "false"
+
+      FCAM_DATABASE__URL: "postgresql+psycopg://fcam:fcam_password@postgres:5432/fcam"
+
+      FCAM_MASTER_KEY: "${FCAM_MASTER_KEY:-change_me_master_key_32_bytes_minimum____}"
+      FCAM_STATE__MODE: "redis"
+      FCAM_STATE__REDIS__URL: "redis://redis:6379/0"
+
+      FCAM_OBSERVABILITY__METRICS_ENABLED: "true"
+
+  fcam_admin:
+    build: "."
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      FCAM_SERVER__PORT: "8001"
+      FCAM_SERVER__ENABLE_DATA_PLANE: "false"
+      FCAM_SERVER__ENABLE_CONTROL_PLANE: "true"
+
+      FCAM_DATABASE__URL: "postgresql+psycopg://fcam:fcam_password@postgres:5432/fcam"
+
+      FCAM_ADMIN_TOKEN: "${FCAM_ADMIN_TOKEN:-change_me_admin_token}"
+      FCAM_MASTER_KEY: "${FCAM_MASTER_KEY:-change_me_master_key_32_bytes_minimum____}"
+      FCAM_STATE__MODE: "redis"
+      FCAM_STATE__REDIS__URL: "redis://redis:6379/0"
+
+      FCAM_OBSERVABILITY__METRICS_ENABLED: "true"
+
+volumes:
+  pgdata:

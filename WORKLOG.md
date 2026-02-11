@@ -1,0 +1,179 @@
+# FCAM 实施日志（Repository Worklog）
+
+> 目的：把“我做了什么/为什么这么做/验证结果/下一步”作为可追溯记录，避免语义与实现漂移。  
+> 约束：不记录任何明文 token/api_key/Authorization；如需示例一律用占位符。
+
+## 2026-02-10（UTC）
+
+### M0 → M1：工程骨架落地
+
+**完成内容**
+- 初始化目录结构：`app/`、`tests/`、`migrations/`、`scripts/`
+- FastAPI 骨架：`app/main.py` + 探活 `GET /healthz`、就绪 `GET /readyz`
+- 配置系统（单一入口）：默认值 → `config.yaml`（`FCAM_CONFIG`）→ env 覆盖（`FCAM_*__*`）
+- 机密注入：按配置读取 `FCAM_ADMIN_TOKEN`、`FCAM_MASTER_KEY`（仅 env/secret）
+- DB：SQLAlchemy 模型（对齐 PRD）+ Alembic 初始迁移（`0001_init`）
+- 网关基础约束：路径白名单、Body 大小限制、Content-Type 校验
+- 可观测：结构化 JSON 日志（request_id 注入）+ 脱敏（Bearer/token/api_key 等）
+- 测试：pytest + pytest-cov 门禁脚本（`--cov=app --cov-fail-under=80`），并补齐脱敏/配置/中间件/readyz 的单测
+- Docker(dev)：`Dockerfile` + `docker-compose.yml` + `scripts/entrypoint.sh`
+
+**关键选择（KISS/DRY/SOLID）**
+- 先按 `TD.md` 的 M1 做“可运行骨架”，把可测/可观测/可迁移的边界先搭起来，再进入 M2/M3 的业务链路。
+- 日志脱敏采用“字段名脱敏 + 文本模式脱敏”两层，避免遗漏（但不写入任何明文机密）。
+
+**当前阻塞**
+- 当前执行环境缺少 `python/pytest/docker` 命令，导致 M1 DoD（`pytest` 与 `docker compose up`）无法在此环境直接实跑验证。
+- 后续将采用“仓库内自举（portable python）”的方式跑测试/覆盖率，避免全局安装污染环境（如仍需 Docker 将另行说明）。
+
+**已采取措施（消除 Python/pytest 阻塞）**
+- 新增 `scripts/bootstrap-python.ps1`：下载 NuGet portable python（不做全局安装）→ 创建 `.venv` → 安装依赖 → 跑 `pytest --cov=app --cov-fail-under=80`
+
+**本次验证结果**
+- `powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/bootstrap-python.ps1"`：通过（pytest 全绿；覆盖率门禁通过）
+- `docker compose up --build`：当前环境缺少 docker CLI/daemon，暂无法验证（后续如需满足 M1 DoD，将按“安装 Docker 或在具备 Docker 的环境中验证”处理）
+
+### M2：数据面 request_logs 落库 + /api 集成测试补齐
+
+**完成内容**
+- request_logs：在 `RequestIdMiddleware` 中为每个 `/api/*` 请求落 1 条 `request_logs`（成功/拒绝/上游透传/超时均覆盖）
+- request_logs 字段：新增 `retry_count`（对应契约与 `agent.md` 13.4/8.1 建议字段）
+- /api 集成测试：为每个数据面端点补齐 200/429/5xx/timeout 的 mock Firecrawl 用例；并增加 request_logs “恰好 1 条”与 `retry_count` 断言
+
+**关键选择（KISS/DRY/SOLID）**
+- 选择在中间件统一落库（而非每个路由手写落库），保证“每个入站请求恰好 1 条”且避免重复代码。
+- 网关错误码通过 `request.state.error_code` 传递并落到 `RequestLog.error_message`（结构化可过滤），不额外引入 `error_code` 列（YAGNI，后续如确有需要再扩展）。
+- request_logs 落库失败不影响请求返回（仅记录结构化错误日志），避免将“可观测性写入失败”放大为用户面故障。
+
+**本次验证结果**
+- `pytest "tests/test_api_data_plane.py"`：通过（覆盖 `/api/*` 转发映射 + 200/429/5xx/timeout + request_logs 断言）
+- `pytest "tests/test_migrations.py"`：通过（Alembic head 可升级；包含新增列迁移）
+- `pytest --cov=app --cov-fail-under=80`：通过（60 passed；Total coverage 89.90%）
+
+### M3：控制面（/admin/*）闭环
+
+**完成内容**
+- 控制面路由：新增 `app/api/control_plane.py` 并挂载到 `app/main.py`
+- Admin 鉴权：复用 `require_admin`（Admin Token 独立于 Client Token）
+- 审计日志：对 key/client 的 create/update/delete/rotate/reset/test 写入 `audit_logs`（含 ip/ua）
+- Key 管理：`/admin/keys*` 全部端点（加密落库、去重 hash、last4、test、reset-quota）
+- Client 管理：`/admin/clients*` 全部端点（token 仅返回一次；rotate 仅返回一次）
+- 统计与查询：`/admin/stats`、`/admin/stats/quota`、`/admin/logs`、`/admin/audit-logs`（含 cursor 分页/过滤）
+- 中间件修正：允许无 body 的 `POST/DELETE`（例如 rotate/delete/reset）不强制 `Content-Type: application/json`
+
+**关键选择（KISS/DRY/SOLID）**
+- `/admin/keys/{id}` 的删除实现为“软禁用”（`is_active=false,status=disabled`），避免历史 `request_logs` 丢失 key 关联；契约仍保持 204（不返回明文 key）。
+- 除 `key.test` 复用 Forwarder 内部提交外，其余管理操作与 `audit_logs` 同事务提交，保证管理操作与审计一致（失败则整体回滚）。
+- `/admin/logs` 的 `error_message` 记录网关错误码（`error.code`），避免引入额外列（YAGNI），同时便于过滤查询。
+
+**本次验证结果**
+- `pytest "tests/test_admin_control_plane.py"`：通过（覆盖 /admin 全链路 + 审计 + 分页/过滤边界）
+- `pytest`：通过（全量回归）
+- `pytest --cov=app --cov-fail-under=80`：通过（69 passed；Total coverage 84.64%）
+
+### M2.4：幂等（X-Idempotency-Key）
+
+**完成内容**
+- 幂等核心：新增 `app/core/idempotency.py`，使用 `idempotency_records` 落库（`client_id + idempotency_key` 唯一）
+- 幂等接入：对 `POST /api/crawl`、`POST /api/agent` 支持 `X-Idempotency-Key`；同 key 同 body 自动 replay；同 key 不同 body 返回 409
+- TTL：默认 24h（惰性清理过期记录）；超时/不可用导致“未知是否创建任务”的场景保持 `in_progress`，避免重复创建风险
+- 配置：新增 `idempotency.*`（可选强制 `require_on=["crawl","agent"]`）并更新 `config.yaml`
+- 模型对齐：补齐 `IdempotencyRecord` 的唯一约束（与 Alembic 迁移一致）
+
+**关键选择（KISS/DRY/SOLID）**
+- 仅在 `crawl/agent` 接入幂等（最小必要面），其余端点不引入额外状态写入。
+- “拿不到上游响应”的情况不做自动重试与完成态落库，优先保证不重复创建任务；调用方可等待 TTL 或使用新的幂等键显式重试。
+- replay 存储采用“headers + body(base64)”打包在 `response_body`，避免新增表结构字段（YAGNI）。
+
+**本次验证结果**
+- `pytest "tests/test_api_data_plane.py"`：通过（新增幂等 replay/冲突/in_progress/强制缺失用例）
+
+### M4：可观测（/metrics）+ 保留策略清理
+
+**完成内容**
+- 指标：新增 `app/observability/metrics.py`，按配置暴露 `GET /metrics`（Prometheus）
+- 采集：在 `RequestIdMiddleware` 记录 requests_total/latency；Forwarder 记录 key_selected/key_cooldown/quota_remaining
+- 保留策略：新增 `app/db/cleanup.py` + `scripts/cleanup.py`，支持 request_logs/audit_logs/idempotency_records 清理
+- 配置：新增 `observability.*`（metrics + retention）并更新 `config.yaml`
+- 测试：新增 metrics/cleanup 用例，并补齐幂等 TTL、all cooling、failure mode、client quota 惰性重置等回归
+- 文档：更新 `agent.md`、`Firecrawl-API-Manager-API-Contract.md`、`README.md`、`TD.md`
+
+**关键选择（KISS/DRY/SOLID）**
+- 选择 Prometheus 官方 `prometheus-client`，避免手写 exposition 格式与线程安全问题。
+- `/metrics` 默认关闭，减少默认暴露面；由 `observability.metrics_enabled` 显式开启。
+- 清理任务选择外部 cron 调用 `scripts/cleanup.py`（避免在 API 进程内引入常驻定时器/多 worker 一致性问题）。
+
+**本次验证结果**
+- `pytest`：通过（全量回归）
+- `pytest --cov=app --cov-fail-under=80`：通过（覆盖率门禁通过）
+
+### M5：生产形态（Postgres/Redis）+ 端口隔离 + 分布式状态
+
+**完成内容**
+- 生产依赖：新增 `redis`、`psycopg[binary]`（支持 Redis 状态后端与 Postgres 连接）
+- 分布式状态（Redis，按 `state.mode=redis` 开启）：
+  - 并发：新增 `RedisConcurrencyManager`（client/key 共享并发 lease）
+  - 限流：新增 `RedisTokenBucketRateLimiter`（client rpm）
+  - 冷却：新增 `RedisCooldownStore`，429 时写入 TTL，key_pool 在 cooling 状态时读取 TTL
+- 端口隔离：新增 `server.enable_data_plane/enable_control_plane`，允许拆分 `/api` 与 `/admin` 到不同实例/端口；`/readyz` 校验也按启用面板做条件检查
+- 容器化（生产示例）：
+  - `Dockerfile`：非 root 用户运行 + 仅安装生产依赖
+  - `scripts/entrypoint.sh`：uvicorn host/port 读取 `FCAM_SERVER__HOST/PORT`
+  - `docker-compose.prod.yml`：Postgres + Redis + 两实例示例（api/admin 端口隔离）
+- 文档与示例：更新 `README.md`、`agent.md`、`.env.example`、`TD.md`
+
+**关键选择（KISS/DRY/SOLID）**
+- 选择 Redis 作为“并发/限流/冷却”的分布式权威（与 `agent.md` 15.2 推荐一致），避免 DB 行锁实现复杂度。
+- 端口隔离通过“同一代码、不同部署开关”实现（不引入双进程/反向代理强依赖），保持部署简单可控。
+
+**本次验证结果**
+- `pytest`：通过（全量回归）
+- `pytest --cov=app --cov-fail-under=80`：通过（覆盖率门禁通过）
+
+## 2026-02-11（UTC）
+
+### Runbook：本地启动服务（非 Docker）
+
+**执行步骤（Windows / PowerShell）**
+- 迁移：`& ".venv/Scripts/python.exe" -m alembic upgrade head`
+- 启动：`& ".venv/Scripts/python.exe" -m uvicorn "app.main:app" --host "127.0.0.1" --port "8000"`
+
+**关键选择（KISS/安全默认）**
+- 本地启动默认绑定 `127.0.0.1`，避免意外对外网暴露（如需对外访问再显式改为 `0.0.0.0`）。
+- `FCAM_ADMIN_TOKEN` / `FCAM_MASTER_KEY` 仅通过环境变量注入，不写入任何文档/日志明文。
+
+**验证结果**
+- `GET http://127.0.0.1:8000/healthz` → 200 `{"ok": true}`
+- `GET http://127.0.0.1:8000/readyz` → 200 `{"ok": true}`
+
+### M6（可选）：最小内置 WebUI（/ui）
+
+**完成内容**
+- 新增内置静态页面：`GET /ui/`（仅当 `server.enable_control_plane=true` 时挂载）
+- WebUI 复用既有 `/admin/*` 控制面能力：Key/Client 的创建/更新/启用禁用/软禁用、Key test、Client rotate、`/admin/stats` 查看
+- Admin Token 由用户在页面输入，仅保存在浏览器内存中（刷新即丢失）
+
+**关键选择（KISS/安全默认）**
+- 不新增任何“UI 专用后端 API”，只做静态页面 + fetch 调用现有 `/admin/*`（避免重复语义与接口漂移）。
+- UI 页面本身不做强制鉴权（否则浏览器难以携带 header 加载 HTML），但只在控制面启用时挂载，并建议仅内网暴露控制面端口。
+- Token 默认不落本地存储（localStorage/sessionStorage），降低误操作导致的长期泄露面（如需持久化再显式扩展）。
+
+**本次验证结果**
+- `pytest "tests/test_ui.py"`：通过（控制面开关覆盖：200 HTML / 404 NOT_FOUND）
+- `pytest --cov=app --cov-fail-under=80`：通过（92 passed；Total coverage 85.32%）
+
+### Runbook：端口冲突时启动（示例：18000）
+
+**问题现象**
+- 启动 uvicorn 绑定 `127.0.0.1:8000` 或 `:8001` 失败：`[Errno 10048] ... only one usage of each socket address`
+
+**处理方式（KISS）**
+- 选择一个空闲端口（例如 18000），并用 env override 同步 `server.port`（仅用于日志字段对齐，不影响实际绑定端口）：
+  - `FCAM_SERVER__PORT=18000`
+  - `uvicorn ... --port 18000`
+
+**验证结果**
+- `GET /healthz` → 200
+- `GET /readyz` → 200
+- `GET /ui/` → 200（HTML）
+- `GET /docs` → 200（HTML）

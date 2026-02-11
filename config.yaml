@@ -1,0 +1,66 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+  trust_proxy_headers: false
+  enable_docs: true
+  enable_data_plane: true
+  enable_control_plane: true
+
+firecrawl:
+  # 重要：该 base_url 必须“包含 /v1”，网关转发时只拼接资源路径（见接口契约）
+  base_url: "https://api.firecrawl.dev/v1"
+  timeout: 30
+  max_retries: 3
+  failure_threshold: 3
+  failure_window_seconds: 60
+  failed_cooldown_seconds: 60
+
+security:
+  client_auth:
+    enabled: true
+    scheme: "bearer" # bearer | mtls（MVP 默认 bearer）
+  admin:
+    token_env: "FCAM_ADMIN_TOKEN"
+  key_encryption:
+    master_key_env: "FCAM_MASTER_KEY"
+  request_limits:
+    max_body_bytes: 1048576 # 1MB
+    allowed_paths: ["scrape", "crawl", "search", "agent"]
+
+quota:
+  # 文档冻结：quota.timezone=UTC；quota.count_mode=success
+  timezone: "UTC"
+  count_mode: "success" # success | attempt
+  default_daily_limit: 5
+  reset_time: "00:00"
+  enable_quota_check: true
+
+rate_limit:
+  cooldown_seconds: 60
+
+idempotency:
+  enabled: true
+  ttl_seconds: 86400 # 24h
+  max_response_bytes: 1048576 # 1MB
+  require_on: [] # e.g. ["crawl", "agent"] to enforce header
+
+database:
+  path: "./data/api_manager.db"
+
+logging:
+  level: "INFO"
+  format: "json" # json | plain
+  redact_fields: ["authorization", "api_key", "token", "cookie", "set-cookie"]
+
+observability:
+  metrics_enabled: false
+  metrics_path: "/metrics"
+  retention:
+    request_logs_days: 30
+    audit_logs_days: 90
+
+state:
+  mode: "memory" # memory | redis
+  redis:
+    url: "redis://localhost:6379/0"
+    key_prefix: "fcam"

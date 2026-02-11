@@ -1,0 +1,12 @@
+services:
+  fcam:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      FCAM_ADMIN_TOKEN: "dev_admin_token"
+      FCAM_MASTER_KEY: "dev_master_key_32_bytes_minimum____"
+      FCAM_CONFIG: "/app/config.yaml"
+    volumes:
+      - "./data:/app/data"
+
