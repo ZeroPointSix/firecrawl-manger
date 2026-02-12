@@ -4,721 +4,765 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>FCAM WebUI</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-      }
-      body {
-        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
-          "Segoe UI Emoji";
-        margin: 24px;
-        line-height: 1.4;
-      }
-      h1 {
-        margin: 0 0 12px 0;
-        font-size: 20px;
-      }
-      h2 {
-        margin: 18px 0 10px 0;
-        font-size: 16px;
-      }
-      .muted {
-        opacity: 0.8;
-        font-size: 12px;
-      }
-      .row {
-        display: flex;
-        gap: 12px;
-        flex-wrap: wrap;
-        align-items: end;
-      }
-      .card {
-        border: 1px solid rgba(127, 127, 127, 0.35);
-        border-radius: 10px;
-        padding: 12px;
-        margin: 12px 0;
-      }
-      label {
-        display: block;
-        font-size: 12px;
-        margin-bottom: 6px;
-        opacity: 0.85;
-      }
-      input,
-      select {
-        padding: 8px;
-        border-radius: 8px;
-        border: 1px solid rgba(127, 127, 127, 0.35);
-        min-width: 180px;
-      }
-      input[type="number"] {
-        min-width: 120px;
-      }
-      button {
-        padding: 8px 10px;
-        border-radius: 8px;
-        border: 1px solid rgba(127, 127, 127, 0.35);
-        background: transparent;
-        cursor: pointer;
-      }
-      button.primary {
-        border-color: rgba(45, 140, 255, 0.6);
-      }
-      button.danger {
-        border-color: rgba(255, 80, 80, 0.7);
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-      }
-      th,
-      td {
-        border-bottom: 1px solid rgba(127, 127, 127, 0.25);
-        text-align: left;
-        padding: 8px 6px;
-        vertical-align: top;
-      }
-      th {
-        position: sticky;
-        top: 0;
-        background: Canvas;
-        z-index: 1;
-      }
-      .mono {
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-      }
-      pre {
-        white-space: pre-wrap;
-        word-break: break-word;
-        background: rgba(127, 127, 127, 0.08);
-        padding: 10px;
-        border-radius: 10px;
-      }
-      .status-ok {
-        border-left: 4px solid rgba(60, 180, 75, 0.8);
-        padding-left: 10px;
-      }
-      .status-warn {
-        border-left: 4px solid rgba(255, 165, 0, 0.8);
-        padding-left: 10px;
-      }
-      .status-err {
-        border-left: 4px solid rgba(255, 80, 80, 0.8);
-        padding-left: 10px;
-      }
-    </style>
+    <link rel="stylesheet" href="./app.css" />
+    <meta name="robots" content="noindex,nofollow" />
   </head>
   <body>
-    <h1>FCAM WebUI（最小可用）</h1>
-    <div class="muted">
-      仅用于调用现有 <span class="mono">/admin/*</span> 控制面；本页面不会持久化 Admin Token（刷新后需重新输入）。
-      建议只在内网/控制面实例暴露。
-    </div>
+    <div class="app">
+      <header class="topbar">
+        <div class="topbar-main">
+          <div class="topbar-left">
+            <div class="brand">
+              <div class="brand-logo">F</div>
+              <div>
+                <div class="brand-title">FCAM WebUI</div>
+                <div class="brand-sub"><span id="viewTitle">概览</span> · Firecrawl API Manager 控制台</div>
+              </div>
+            </div>
+          </div>
+          <div class="topbar-right">
+            <span class="conn-pill" title="/admin/* 控制面">
+              <span class="status-dot warn" id="connDot"></span><span id="connText">未连接</span>
+            </span>
+            <span class="pill mono" id="appOrigin">-</span>
+            <button class="btn" type="button" id="btnOpenConn">连接</button>
+            <button class="btn" type="button" id="btnQuickRefresh">刷新</button>
+            <button class="btn" type="button" id="btnDocs">打开 /docs</button>
+          </div>
+        </div>
 
-    <div class="card">
-      <h2>连接</h2>
-      <div class="row">
-        <div>
-          <label for="adminToken">Admin Token（环境变量：FCAM_ADMIN_TOKEN）</label>
-          <input id="adminToken" type="password" placeholder="dev_admin_token" />
+        <nav class="tabs" role="navigation" aria-label="导航">
+          <button class="nav-item" type="button" data-view="dashboard" aria-current="page">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M4 13h7V4H4v9Zm9 7h7V11h-7v9ZM4 20h7v-5H4v5Zm9-11h7V4h-7v5Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+              />
+            </svg>
+            概览
+          </button>
+          <button class="nav-item" type="button" data-view="keys">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M21 10a7 7 0 1 1-13.4-3M10 14l-6 6m0 0v-4m0 4h4"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+            API Keys
+          </button>
+          <button class="nav-item" type="button" data-view="clients">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M16 11a4 4 0 1 0-8 0m14 9v-1a6 6 0 0 0-6-6H8a6 6 0 0 0-6 6v1"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+            Clients
+          </button>
+          <button class="nav-item" type="button" data-view="logs">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+            请求日志
+          </button>
+          <button class="nav-item" type="button" data-view="audit">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 3l8 4v6c0 5-3.5 9-8 10-4.5-1-8-5-8-10V7l8-4Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linejoin="round"
+              />
+              <path
+                d="M9 12l2 2 4-5"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            审计日志
+          </button>
+          <button class="nav-item" type="button" data-view="help">
+            <svg class="nav-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M12 18h.01M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.3-1.5 1-1.5 1.7V14"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+              <path
+                d="M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z"
+                stroke="currentColor"
+                stroke-width="1.6"
+              />
+            </svg>
+            帮助
+          </button>
+        </nav>
+      </header>
+
+      <div class="main">
+
+        <div class="content">
+          <section class="view" data-view="dashboard">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>概览（/admin/stats）</h2>
+                  <div class="subtext">快速确认 Key/Client 状态；需要先连接 Admin Token。</div>
+                </div>
+              </div>
+              <div class="card-body">
+                <pre class="code" id="dashboardOutput">尚未加载。</pre>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>最小使用流程</h2>
+                  <div class="subtext">UI 仅调用既有控制面 API（/admin/*），不引入额外后端语义。</div>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="empty">
+                  <div>1) 点击右上角「连接」，输入 <span class="mono">FCAM_ADMIN_TOKEN</span>（仅内存保存）。</div>
+                  <div style="margin-top: 8px">2) 在「API Keys」创建/测试 Key（入库后只展示 masked）。</div>
+                  <div style="margin-top: 8px">
+                    3) 在「Clients」创建 Client，复制一次性 token，业务方用该 token 调用 <span class="mono">/api/*</span>。
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>数据面自检（/api/scrape）</h2>
+                  <div class="subtext">
+                    端到端验证：Client Token → 网关鉴权/治理 → Key 池选择 → 上游 scrape。若本实例关闭了 data plane，会返回 404。
+                  </div>
+                </div>
+              </div>
+              <div class="card-body">
+                <form id="dpTestForm">
+                  <div class="form-grid">
+                    <div class="field" style="grid-column: 1 / -1">
+                      <label for="dpClientToken">Client Token（用于 /api/*）</label>
+                      <input id="dpClientToken" type="password" autocomplete="off" placeholder="client_token" />
+                      <div class="muted">不会持久化保存；仅用于本次自检。</div>
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1">
+                      <label for="dpTestUrl">test_url</label>
+                      <input id="dpTestUrl" placeholder="https://www.google.com" />
+                    </div>
+                  </div>
+                  <div class="form-actions">
+                    <button class="btn primary" type="button" id="dpTestRun">执行 /api/scrape</button>
+                  </div>
+                </form>
+
+                <pre class="code" id="dpTestOutput" hidden></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view="keys" hidden>
+            <div class="split">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>API Keys</h2>
+                    <div class="subtext">共 <span class="mono" id="keysCount">0</span> 条；点击一行在右侧编辑。</div>
+                  </div>
+                  <div class="toolbar">
+                    <div class="field">
+                      <label for="keysSearch">搜索</label>
+                      <input id="keysSearch" type="search" placeholder="id / name / status / masked" />
+                    </div>
+                    <button class="btn" type="button" id="keysRefresh">刷新</button>
+                    <button class="btn" type="button" id="keysResetQuota">重置配额</button>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>id</th>
+                        <th>name</th>
+                        <th>masked</th>
+                        <th>status</th>
+                        <th>active</th>
+                        <th>usage/quota</th>
+                        <th>conc</th>
+                        <th>rpm</th>
+                        <th>cooldown</th>
+                        <th>last_used</th>
+                      </tr>
+                    </thead>
+                    <tbody id="keysTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="stack">
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <h2>Key 详情</h2>
+                      <div class="subtext">更新/测试/软禁用（DELETE 实际为禁用，不会影响历史日志可追溯）。</div>
+                    </div>
+                    <span class="badge" id="keyStatusBadge"><span class="dot"></span>未选择</span>
+                  </div>
+                  <div class="card-body">
+                    <div class="empty" id="keyEmpty">从左侧选择一条 Key。</div>
+                    <form id="keyEditForm" hidden>
+                      <div class="form-grid">
+                        <div class="field">
+                          <label for="keyEditId">id</label>
+                          <input id="keyEditId" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditMasked">masked</label>
+                          <input id="keyEditMasked" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditName">name</label>
+                          <input id="keyEditName" />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditPlan">plan_type</label>
+                          <input id="keyEditPlan" />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditQuota">daily_quota</label>
+                          <input id="keyEditQuota" type="number" min="0" />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditConc">max_concurrent</label>
+                          <input id="keyEditConc" type="number" min="0" />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditRpm">rate_limit_per_min</label>
+                          <input id="keyEditRpm" type="number" min="0" />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditActive">is_active</label>
+                          <select id="keyEditActive">
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        </div>
+                        <div class="field" style="grid-column: 1 / -1">
+                          <label for="keyTestUrl">test_url（Key Test）</label>
+                          <input id="keyTestUrl" placeholder="https://www.google.com" />
+                          <div class="muted">点击「测试」时使用（调用 <span class="mono">POST /admin/keys/{id}/test</span>）。</div>
+                        </div>
+                      </div>
+
+                      <div class="form-actions">
+                        <button class="btn primary" type="button" id="keySave">保存</button>
+                        <button class="btn" type="button" id="keyTest">测试</button>
+                        <button class="btn danger" type="button" id="keySoftDelete">软禁用</button>
+                      </div>
+                    </form>
+
+                    <pre class="code" id="keyOpOutput" hidden></pre>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <h2>创建 Key</h2>
+                      <div class="subtext">明文 api_key 仅用于加密落库；创建后不会再次展示明文。</div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <form id="keyCreateForm">
+                      <div class="form-grid">
+                        <div class="field" style="grid-column: 1 / -1">
+                          <label for="keyCreateApiKey">api_key</label>
+                          <input id="keyCreateApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreateName">name</label>
+                          <input id="keyCreateName" placeholder="free-01" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreatePlan">plan_type</label>
+                          <input id="keyCreatePlan" value="free" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreateQuota">daily_quota</label>
+                          <input id="keyCreateQuota" type="number" min="0" value="5" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreateConc">max_concurrent</label>
+                          <input id="keyCreateConc" type="number" min="0" value="2" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreateRpm">rate_limit_per_min</label>
+                          <input id="keyCreateRpm" type="number" min="0" value="10" />
+                        </div>
+                        <div class="field">
+                          <label for="keyCreateActive">is_active</label>
+                          <select id="keyCreateActive">
+                            <option value="true" selected>True</option>
+                            <option value="false">False</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="form-actions">
+                        <button class="btn primary" type="button" id="keyCreate">创建</button>
+                      </div>
+                    </form>
+
+                    <pre class="code" id="keyCreateOutput" hidden></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view="clients" hidden>
+            <div class="split">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>Clients</h2>
+                    <div class="subtext">共 <span class="mono" id="clientsCount">0</span> 条；点击一行在右侧编辑。</div>
+                  </div>
+                  <div class="toolbar">
+                    <div class="field">
+                      <label for="clientsSearch">搜索</label>
+                      <input id="clientsSearch" type="search" placeholder="id / name" />
+                    </div>
+                    <button class="btn" type="button" id="clientsRefresh">刷新</button>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>id</th>
+                        <th>name</th>
+                        <th>active</th>
+                        <th>usage/quota</th>
+                        <th>rpm</th>
+                        <th>conc</th>
+                        <th>created</th>
+                        <th>last_used</th>
+                      </tr>
+                    </thead>
+                    <tbody id="clientsTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="stack">
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <h2>Client 详情</h2>
+                      <div class="subtext">Client 用于鉴权/限流/并发/配额治理；token 仅创建/rotate 时返回一次。</div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <div class="empty" id="clientEmpty">从左侧选择一个 Client。</div>
+                    <form id="clientEditForm" hidden>
+                      <div class="form-grid">
+                        <div class="field">
+                          <label for="clientEditId">id</label>
+                          <input id="clientEditId" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="clientEditName">name</label>
+                          <input id="clientEditName" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="clientEditQuota">daily_quota（可空）</label>
+                          <input id="clientEditQuota" type="number" min="0" placeholder="留空=不修改" />
+                        </div>
+                        <div class="field" style="align-self: end">
+                          <label>&nbsp;</label>
+                          <label class="muted" style="display: flex; gap: 8px; align-items: center">
+                            <input id="clientEditQuotaClear" type="checkbox" />
+                            清空 daily_quota
+                          </label>
+                        </div>
+                        <div class="field">
+                          <label for="clientEditRpm">rate_limit_per_min</label>
+                          <input id="clientEditRpm" type="number" min="0" />
+                        </div>
+                        <div class="field">
+                          <label for="clientEditConc">max_concurrent</label>
+                          <input id="clientEditConc" type="number" min="0" />
+                        </div>
+                        <div class="field">
+                          <label for="clientEditActive">is_active</label>
+                          <select id="clientEditActive">
+                            <option value="true">True</option>
+                            <option value="false">False</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div class="form-actions">
+                        <button class="btn primary" type="button" id="clientSave">保存</button>
+                        <button class="btn" type="button" id="clientRotate">Rotate Token</button>
+                        <button class="btn danger" type="button" id="clientSoftDelete">软禁用</button>
+                      </div>
+                    </form>
+
+                    <pre class="code" id="clientOpOutput" hidden></pre>
+                  </div>
+                </div>
+
+                <div class="card">
+                  <div class="card-header">
+                    <div>
+                      <h2>创建 Client</h2>
+                      <div class="subtext">将返回一次性 token（请立即复制保存），用于业务方调用 /api/*。</div>
+                    </div>
+                  </div>
+                  <div class="card-body">
+                    <form id="clientCreateForm">
+                      <div class="form-grid">
+                        <div class="field" style="grid-column: 1 / -1">
+                          <label for="clientCreateName">name</label>
+                          <input id="clientCreateName" placeholder="service-a" />
+                        </div>
+                        <div class="field">
+                          <label for="clientCreateQuota">daily_quota（可空）</label>
+                          <input id="clientCreateQuota" type="number" min="0" placeholder="" />
+                        </div>
+                        <div class="field">
+                          <label for="clientCreateRpm">rate_limit_per_min</label>
+                          <input id="clientCreateRpm" type="number" min="0" value="60" />
+                        </div>
+                        <div class="field">
+                          <label for="clientCreateConc">max_concurrent</label>
+                          <input id="clientCreateConc" type="number" min="0" value="10" />
+                        </div>
+                        <div class="field">
+                          <label for="clientCreateActive">is_active</label>
+                          <select id="clientCreateActive">
+                            <option value="true" selected>True</option>
+                            <option value="false">False</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div class="form-actions">
+                        <button class="btn primary" type="button" id="clientCreate">创建</button>
+                      </div>
+                    </form>
+
+                    <pre class="code" id="clientCreateOutput" hidden></pre>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view="logs" hidden>
+            <div class="split">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>请求日志（/admin/logs）</h2>
+                    <div class="subtext">仅记录 /api/* 入站请求；支持过滤与 cursor 分页。</div>
+                  </div>
+                  <div class="toolbar">
+                    <button class="btn primary" type="button" id="logsLoad">加载</button>
+                    <button class="btn" type="button" id="logsMore" disabled>更多</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="filters">
+                    <div class="field">
+                      <label for="logsLimit">limit</label>
+                      <input id="logsLimit" type="number" min="1" max="200" value="50" />
+                    </div>
+                    <div class="field">
+                      <label for="logsFrom">from</label>
+                      <input id="logsFrom" type="datetime-local" />
+                    </div>
+                    <div class="field">
+                      <label for="logsTo">to</label>
+                      <input id="logsTo" type="datetime-local" />
+                    </div>
+                    <div class="field">
+                      <label for="logsSuccess">success</label>
+                      <select id="logsSuccess">
+                        <option value="any" selected>Any</option>
+                        <option value="true">True</option>
+                        <option value="false">False</option>
+                      </select>
+                    </div>
+                    <div class="field">
+                      <label for="logsClientId">client_id</label>
+                      <input id="logsClientId" type="number" min="0" />
+                    </div>
+                    <div class="field">
+                      <label for="logsApiKeyId">api_key_id</label>
+                      <input id="logsApiKeyId" type="number" min="0" />
+                    </div>
+                    <div class="field">
+                      <label for="logsEndpoint">endpoint</label>
+                      <input id="logsEndpoint" placeholder="scrape/crawl/..." />
+                    </div>
+                    <div class="field">
+                      <label for="logsStatusCode">status_code</label>
+                      <input id="logsStatusCode" type="number" min="0" />
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1">
+                      <label for="logsRequestId">request_id</label>
+                      <input id="logsRequestId" placeholder="精准定位一次调用" />
+                    </div>
+                    <div class="field" style="grid-column: 1 / -1">
+                      <label for="logsIdempotencyKey">idempotency_key</label>
+                      <input id="logsIdempotencyKey" placeholder="crawl/agent 幂等键" />
+                    </div>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>id</th>
+                        <th>created_at</th>
+                        <th>request_id</th>
+                        <th>client_id</th>
+                        <th>api_key_id</th>
+                        <th>endpoint</th>
+                        <th>status</th>
+                        <th>ms</th>
+                        <th>retry</th>
+                        <th>success</th>
+                        <th>error</th>
+                      </tr>
+                    </thead>
+                    <tbody id="logsTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>详情</h2>
+                    <div class="subtext">点击左侧一行查看。</div>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="empty" id="logEmpty">未选择任何日志。</div>
+                  <pre class="code" id="logDetail" hidden></pre>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view="audit" hidden>
+            <div class="split">
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>审计日志（/admin/audit-logs）</h2>
+                    <div class="subtext">记录所有管理操作（create/update/delete/rotate/test 等）。</div>
+                  </div>
+                  <div class="toolbar">
+                    <button class="btn primary" type="button" id="auditLoad">加载</button>
+                    <button class="btn" type="button" id="auditMore" disabled>更多</button>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="filters">
+                    <div class="field">
+                      <label for="auditLimit">limit</label>
+                      <input id="auditLimit" type="number" min="1" max="200" value="50" />
+                    </div>
+                    <div class="field">
+                      <label for="auditFrom">from</label>
+                      <input id="auditFrom" type="datetime-local" />
+                    </div>
+                    <div class="field">
+                      <label for="auditTo">to</label>
+                      <input id="auditTo" type="datetime-local" />
+                    </div>
+                    <div class="field">
+                      <label for="auditActorType">actor_type</label>
+                      <input id="auditActorType" placeholder="admin" />
+                    </div>
+                    <div class="field">
+                      <label for="auditAction">action</label>
+                      <input id="auditAction" placeholder="key.create / client.rotate ..." />
+                    </div>
+                    <div class="field">
+                      <label for="auditResourceType">resource_type</label>
+                      <input id="auditResourceType" placeholder="api_key / client" />
+                    </div>
+                    <div class="field">
+                      <label for="auditResourceId">resource_id</label>
+                      <input id="auditResourceId" placeholder="123 / all" />
+                    </div>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>id</th>
+                        <th>created_at</th>
+                        <th>action</th>
+                        <th>resource_type</th>
+                        <th>resource_id</th>
+                        <th>actor</th>
+                        <th>ip</th>
+                      </tr>
+                    </thead>
+                    <tbody id="auditTbody"></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2>详情</h2>
+                    <div class="subtext">点击左侧一行查看。</div>
+                  </div>
+                </div>
+                <div class="card-body">
+                  <div class="empty" id="auditEmpty">未选择任何审计记录。</div>
+                  <pre class="code" id="auditDetail" hidden></pre>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="view" data-view="help" hidden>
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>帮助</h2>
+                  <div class="subtext">安全与边界说明（请务必阅读）。</div>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="empty">
+                  <div><strong>定位：</strong>本 WebUI 是静态页面，仅用于调用现有 <span class="mono">/admin/*</span>。</div>
+                  <div style="margin-top: 10px">
+                    <strong>安全建议：</strong>
+                    <ul style="margin: 8px 0 0 18px">
+                      <li>生产建议关闭 <span class="mono">/docs</span>，并仅内网暴露控制面端口。</li>
+                      <li>
+                        本 UI 支持可选 token 持久化（同标签页/本机），并可配置过期；仅建议在本机/内网使用，且定期轮换 token。
+                      </li>
+                      <li>删除操作均为“软禁用”，避免影响历史日志追溯。</li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div style="margin-top: 12px">
+                  <div class="muted">命令行自检（示例，不要在工单/群里粘贴明文 token）：</div>
+                  <pre class="code"># PowerShell
+$h=@{ Authorization = "Bearer &lt;ADMIN_TOKEN&gt;" }
+Invoke-RestMethod -Method GET -Uri "&lt;ORIGIN&gt;/admin/stats" -Headers $h</pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>前端日志</h2>
+                  <div class="subtext">记录 UI 内部请求/错误/状态变化（不包含任何 token）。</div>
+                </div>
+                <div class="toolbar">
+                  <button class="btn" type="button" id="clientLogCopy">复制</button>
+                  <button class="btn" type="button" id="clientLogClear">清空</button>
+                </div>
+              </div>
+              <div class="card-body">
+                <pre class="code" id="clientLog">（空）</pre>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2>接口入口</h2>
+                  <div class="subtext">更多细节见接口契约文档与 Swagger。</div>
+                </div>
+              </div>
+              <div class="card-body">
+                <div class="empty">
+                  <div><span class="mono">GET /docs</span>：Swagger（若启用）</div>
+                  <div style="margin-top: 8px"><span class="mono">GET /ui/</span>：WebUI（仅控制面启用时挂载）</div>
+                  <div style="margin-top: 8px"><span class="mono">/admin/*</span>：控制面（需要 Admin Token）</div>
+                  <div style="margin-top: 8px"><span class="mono">/api/*</span>：数据面（需要 Client Token）</div>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
-        <div>
-          <button id="btnSetToken" class="primary">保存到内存</button>
-          <button id="btnClearToken">清空</button>
-        </div>
-        <div class="muted" id="tokenHint"></div>
       </div>
     </div>
 
-    <div class="card">
-      <h2>状态</h2>
-      <pre id="statusBox" class="status-warn">尚未请求。</pre>
-    </div>
-
-    <div class="card">
-      <h2>API Keys</h2>
-      <div class="row">
-        <button id="btnKeysRefresh" class="primary">刷新列表</button>
-        <button id="btnKeysResetQuota">重置今日配额（全部）</button>
+    <dialog id="dlgConn">
+      <div class="dialog-header">
+        <h2>连接 / Admin Token</h2>
+        <button class="btn icon-btn" type="button" id="connClose" aria-label="关闭">×</button>
       </div>
-
-      <h3 class="muted">创建 Key</h3>
-      <div class="row">
-        <div>
-          <label for="keyApiKey">api_key</label>
-          <input id="keyApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" />
+      <div class="dialog-body">
+        <div class="form-grid">
+          <div class="field" style="grid-column: 1 / -1">
+            <label for="connToken">Admin Token（环境变量：FCAM_ADMIN_TOKEN）</label>
+            <input id="connToken" type="password" autocomplete="off" placeholder="dev_admin_token" />
+            <div class="muted">提示：token 具备管理权限；请仅在本机/内网控制面端口使用。</div>
+          </div>
+          <div class="field">
+            <label for="connRememberMode">保存方式</label>
+            <select id="connRememberMode">
+              <option value="session" selected>同标签页（刷新不丢失）</option>
+              <option value="memory">仅本次（内存）</option>
+              <option value="local">本机持久（localStorage）</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="connRememberHours">过期（小时）</label>
+            <input id="connRememberHours" type="number" min="1" max="720" value="8" />
+          </div>
         </div>
-        <div>
-          <label for="keyName">name</label>
-          <input id="keyName" placeholder="free-01" />
+        <div class="form-actions">
+          <button class="btn primary" type="button" id="connSave">保存</button>
+          <button class="btn" type="button" id="connTest">测试连接</button>
+          <button class="btn" type="button" id="connClear">清空</button>
         </div>
-        <div>
-          <label for="keyPlan">plan_type</label>
-          <input id="keyPlan" value="free" />
+        <div class="muted" style="margin-top: 10px">
+          建议设置较短过期时间；如选择本机持久保存，注意浏览器扩展/共享设备可能导致泄露。
         </div>
-        <div>
-          <label for="keyQuota">daily_quota</label>
-          <input id="keyQuota" type="number" value="5" />
+        <div class="muted" style="margin-top: 10px">
+          当前 origin：<span class="mono" id="connOrigin">-</span>
         </div>
-        <div>
-          <label for="keyConc">max_concurrent</label>
-          <input id="keyConc" type="number" value="2" />
-        </div>
-        <div>
-          <label for="keyRpm">rate_limit_per_min</label>
-          <input id="keyRpm" type="number" value="10" />
-        </div>
-        <div>
-          <label for="keyActive">is_active</label>
-          <select id="keyActive">
-            <option value="true" selected>True</option>
-            <option value="false">False</option>
-          </select>
-        </div>
-        <div>
-          <button id="btnKeyCreate" class="primary">创建</button>
-        </div>
+        <pre class="code" id="connTestOutput" hidden></pre>
       </div>
+    </dialog>
 
-      <h3 class="muted">更新 Key</h3>
-      <div class="row">
-        <div>
-          <label for="keyEditId">key_id</label>
-          <input id="keyEditId" type="number" placeholder="选择一行后自动填充" disabled />
-        </div>
-        <div>
-          <label for="keyEditName">name</label>
-          <input id="keyEditName" placeholder="可选" />
-        </div>
-        <div>
-          <label for="keyEditPlan">plan_type</label>
-          <input id="keyEditPlan" placeholder="可选" />
-        </div>
-        <div>
-          <label for="keyEditQuota">daily_quota</label>
-          <input id="keyEditQuota" type="number" placeholder="可选" />
-        </div>
-        <div>
-          <label for="keyEditConc">max_concurrent</label>
-          <input id="keyEditConc" type="number" placeholder="可选" />
-        </div>
-        <div>
-          <label for="keyEditRpm">rate_limit_per_min</label>
-          <input id="keyEditRpm" type="number" placeholder="可选" />
-        </div>
-        <div>
-          <label for="keyEditActive">is_active</label>
-          <select id="keyEditActive">
-            <option value="" selected>（不修改）</option>
-            <option value="true">True</option>
-            <option value="false">False</option>
-          </select>
-        </div>
-        <div>
-          <button id="btnKeyUpdate" class="primary">保存修改</button>
-        </div>
-      </div>
+    <div class="toasts" id="toasts"></div>
 
-      <div style="margin-top: 10px; overflow: auto">
-        <table>
-          <thead>
-            <tr>
-              <th>id</th>
-              <th>name</th>
-              <th>masked</th>
-              <th>status</th>
-              <th>active</th>
-              <th>usage/quota</th>
-              <th>conc</th>
-              <th>rpm</th>
-              <th>cooldown</th>
-              <th>last_used</th>
-              <th>actions</th>
-            </tr>
-          </thead>
-          <tbody id="keysTbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Clients</h2>
-      <div class="row">
-        <button id="btnClientsRefresh" class="primary">刷新列表</button>
-      </div>
-
-      <h3 class="muted">创建 Client</h3>
-      <div class="row">
-        <div>
-          <label for="clientName">name</label>
-          <input id="clientName" placeholder="service-a" />
-        </div>
-        <div>
-          <label for="clientQuota">daily_quota（可空）</label>
-          <input id="clientQuota" type="number" placeholder="" />
-        </div>
-        <div>
-          <label for="clientRpm">rate_limit_per_min</label>
-          <input id="clientRpm" type="number" value="60" />
-        </div>
-        <div>
-          <label for="clientConc">max_concurrent</label>
-          <input id="clientConc" type="number" value="10" />
-        </div>
-        <div>
-          <label for="clientActive">is_active</label>
-          <select id="clientActive">
-            <option value="true" selected>True</option>
-            <option value="false">False</option>
-          </select>
-        </div>
-        <div>
-          <button id="btnClientCreate" class="primary">创建</button>
-        </div>
-      </div>
-
-      <h3 class="muted">更新 Client</h3>
-      <div class="row">
-        <div>
-          <label for="clientEditId">client_id</label>
-          <input id="clientEditId" type="number" placeholder="选择一行后自动填充" disabled />
-        </div>
-        <div>
-          <label for="clientEditQuota">daily_quota（可空）</label>
-          <input id="clientEditQuota" type="number" placeholder="不修改请留空" />
-        </div>
-        <div>
-          <label for="clientEditRpm">rate_limit_per_min</label>
-          <input id="clientEditRpm" type="number" placeholder="不修改请留空" />
-        </div>
-        <div>
-          <label for="clientEditConc">max_concurrent</label>
-          <input id="clientEditConc" type="number" placeholder="不修改请留空" />
-        </div>
-        <div>
-          <label for="clientEditActive">is_active</label>
-          <select id="clientEditActive">
-            <option value="" selected>（不修改）</option>
-            <option value="true">True</option>
-            <option value="false">False</option>
-          </select>
-        </div>
-        <div>
-          <button id="btnClientUpdate" class="primary">保存修改</button>
-        </div>
-      </div>
-
-      <div style="margin-top: 10px; overflow: auto">
-        <table>
-          <thead>
-            <tr>
-              <th>id</th>
-              <th>name</th>
-              <th>active</th>
-              <th>usage/quota</th>
-              <th>rpm</th>
-              <th>conc</th>
-              <th>created</th>
-              <th>last_used</th>
-              <th>actions</th>
-            </tr>
-          </thead>
-          <tbody id="clientsTbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Stats</h2>
-      <div class="row">
-        <button id="btnStatsLoad" class="primary">加载 /admin/stats</button>
-      </div>
-      <pre id="statsBox" class="status-warn">尚未加载。</pre>
-    </div>
-
-    <script>
-      "use strict";
-
-      let adminToken = "";
-
-      function $(id) {
-        return document.getElementById(id);
-      }
-
-      function setStatus(kind, message, details) {
-        const box = $("statusBox");
-        box.className = kind === "ok" ? "status-ok" : kind === "err" ? "status-err" : "status-warn";
-        if (details) {
-          box.textContent = message + "\n\n" + JSON.stringify(details, null, 2);
-        } else {
-          box.textContent = message;
-        }
-      }
-
-      function requireToken() {
-        if (!adminToken) {
-          throw new Error("请先设置 Admin Token（FCAM_ADMIN_TOKEN）");
-        }
-      }
-
-      async function api(method, path, body) {
-        requireToken();
-        const headers = { Authorization: "Bearer " + adminToken, Accept: "application/json" };
-        const opts = { method, headers };
-        if (body !== undefined) {
-          headers["Content-Type"] = "application/json";
-          opts.body = JSON.stringify(body);
-        }
-        const resp = await fetch(path, opts);
-        const isJson = (resp.headers.get("content-type") || "").includes("application/json");
-        const payload = isJson ? await resp.json() : await resp.text();
-        if (!resp.ok) {
-          const err = isJson ? payload : { error: { code: "HTTP_ERROR", message: String(payload) } };
-          throw new Error((err && err.error && err.error.code ? err.error.code + ": " : "") + (err.error?.message || "请求失败"));
-        }
-        return payload;
-      }
-
-      function td(text) {
-        const el = document.createElement("td");
-        el.textContent = text == null ? "" : String(text);
-        return el;
-      }
-
-      function button(text, cls, onClick) {
-        const b = document.createElement("button");
-        if (cls) b.className = cls;
-        b.type = "button";
-        b.textContent = text;
-        b.addEventListener("click", onClick);
-        return b;
-      }
-
-      function parseOptionalNumber(value) {
-        const raw = String(value || "").trim();
-        if (!raw) return undefined;
-        const n = Number(raw);
-        if (!Number.isFinite(n)) throw new Error("数字字段非法: " + raw);
-        return n;
-      }
-
-      function parseOptionalBool(value) {
-        if (value === "true") return true;
-        if (value === "false") return false;
-        return undefined;
-      }
-
-      function setTokenFromInput() {
-        adminToken = String($("adminToken").value || "").trim();
-        $("tokenHint").textContent = adminToken ? "已设置（仅内存）" : "未设置";
-        setStatus("ok", adminToken ? "Admin Token 已设置（仅内存）。" : "Admin Token 已清空。");
-      }
-
-      function clearToken() {
-        adminToken = "";
-        $("adminToken").value = "";
-        $("tokenHint").textContent = "未设置";
-        setStatus("warn", "Admin Token 已清空。");
-      }
-
-      function fillKeyEditForm(item) {
-        $("keyEditId").value = item.id;
-        $("keyEditName").value = item.name || "";
-        $("keyEditPlan").value = item.plan_type || "";
-        $("keyEditQuota").value = item.daily_quota ?? "";
-        $("keyEditConc").value = item.max_concurrent ?? "";
-        $("keyEditRpm").value = item.rate_limit_per_min ?? "";
-        $("keyEditActive").value = "";
-      }
-
-      function fillClientEditForm(item) {
-        $("clientEditId").value = item.id;
-        $("clientEditQuota").value = item.daily_quota ?? "";
-        $("clientEditRpm").value = item.rate_limit_per_min ?? "";
-        $("clientEditConc").value = item.max_concurrent ?? "";
-        $("clientEditActive").value = "";
-      }
-
-      async function loadKeys() {
-        try {
-          setStatus("warn", "加载 keys 中…");
-          const body = await api("GET", "/admin/keys");
-          const items = body.items || [];
-          const tbody = $("keysTbody");
-          tbody.textContent = "";
-          for (const item of items) {
-            const tr = document.createElement("tr");
-            tr.appendChild(td(item.id));
-            tr.appendChild(td(item.name || ""));
-            tr.appendChild(td(item.api_key_masked || ""));
-            tr.appendChild(td(item.status || ""));
-            tr.appendChild(td(item.is_active));
-            tr.appendChild(td(String(item.daily_usage ?? 0) + "/" + String(item.daily_quota ?? 0)));
-            tr.appendChild(td(String(item.current_concurrent ?? 0) + "/" + String(item.max_concurrent ?? 0)));
-            tr.appendChild(td(item.rate_limit_per_min ?? ""));
-            tr.appendChild(td(item.cooldown_until || ""));
-            tr.appendChild(td(item.last_used_at || ""));
-
-            const actionTd = document.createElement("td");
-            actionTd.appendChild(
-              button("选择", "", () => {
-                fillKeyEditForm(item);
-                setStatus("ok", "已选中 key_id=" + item.id);
-              })
-            );
-            actionTd.appendChild(
-              button(item.is_active ? "禁用" : "启用", "", async () => {
-                try {
-                  await api("PUT", "/admin/keys/" + item.id, { is_active: !item.is_active });
-                  await loadKeys();
-                  setStatus("ok", "已更新 key_id=" + item.id);
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-            actionTd.appendChild(
-              button("测试", "", async () => {
-                try {
-                  const r = await api("POST", "/admin/keys/" + item.id + "/test", { mode: "scrape", test_url: "https://example.com" });
-                  setStatus("ok", "测试完成 key_id=" + item.id, r);
-                  await loadKeys();
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-            actionTd.appendChild(
-              button("删除(软禁用)", "danger", async () => {
-                if (!confirm("确认软禁用 key_id=" + item.id + " ?")) return;
-                try {
-                  await api("DELETE", "/admin/keys/" + item.id);
-                  await loadKeys();
-                  setStatus("ok", "已软禁用 key_id=" + item.id);
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-            tr.appendChild(actionTd);
-            tbody.appendChild(tr);
-          }
-          setStatus("ok", "keys 加载完成，共 " + items.length + " 条。");
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function createKey() {
-        try {
-          const payload = {
-            api_key: String($("keyApiKey").value || "").trim(),
-            name: String($("keyName").value || "").trim() || null,
-            plan_type: String($("keyPlan").value || "free").trim() || "free",
-            daily_quota: Number(String($("keyQuota").value || "0")),
-            max_concurrent: Number(String($("keyConc").value || "0")),
-            rate_limit_per_min: Number(String($("keyRpm").value || "0")),
-            is_active: $("keyActive").value === "true",
-          };
-          setStatus("warn", "创建 key 中…");
-          const r = await api("POST", "/admin/keys", payload);
-          setStatus("ok", "创建成功 key_id=" + r.id);
-          $("keyApiKey").value = "";
-          await loadKeys();
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function updateKey() {
-        try {
-          const keyId = Number($("keyEditId").value || "0");
-          if (!keyId) throw new Error("请先选择要更新的 key");
-
-          const payload = {};
-          const name = String($("keyEditName").value || "").trim();
-          const plan = String($("keyEditPlan").value || "").trim();
-          if (name) payload.name = name;
-          if (plan) payload.plan_type = plan;
-          const quota = parseOptionalNumber($("keyEditQuota").value);
-          const conc = parseOptionalNumber($("keyEditConc").value);
-          const rpm = parseOptionalNumber($("keyEditRpm").value);
-          const isActive = parseOptionalBool($("keyEditActive").value);
-          if (quota !== undefined) payload.daily_quota = quota;
-          if (conc !== undefined) payload.max_concurrent = conc;
-          if (rpm !== undefined) payload.rate_limit_per_min = rpm;
-          if (isActive !== undefined) payload.is_active = isActive;
-
-          if (Object.keys(payload).length === 0) throw new Error("没有可更新字段（都为空）");
-
-          setStatus("warn", "更新 key 中…");
-          await api("PUT", "/admin/keys/" + keyId, payload);
-          await loadKeys();
-          setStatus("ok", "已更新 key_id=" + keyId);
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function resetKeysQuota() {
-        try {
-          setStatus("warn", "重置 keys 配额中…");
-          const r = await api("POST", "/admin/keys/reset-quota");
-          setStatus("ok", "重置完成。", r);
-          await loadKeys();
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function loadClients() {
-        try {
-          setStatus("warn", "加载 clients 中…");
-          const body = await api("GET", "/admin/clients");
-          const items = body.items || [];
-          const tbody = $("clientsTbody");
-          tbody.textContent = "";
-          for (const item of items) {
-            const tr = document.createElement("tr");
-            tr.appendChild(td(item.id));
-            tr.appendChild(td(item.name || ""));
-            tr.appendChild(td(item.is_active));
-            tr.appendChild(td(String(item.daily_usage ?? 0) + "/" + String(item.daily_quota ?? "")));
-            tr.appendChild(td(item.rate_limit_per_min ?? ""));
-            tr.appendChild(td(item.max_concurrent ?? ""));
-            tr.appendChild(td(item.created_at || ""));
-            tr.appendChild(td(item.last_used_at || ""));
-
-            const actionTd = document.createElement("td");
-            actionTd.appendChild(
-              button("选择", "", () => {
-                fillClientEditForm(item);
-                setStatus("ok", "已选中 client_id=" + item.id);
-              })
-            );
-            actionTd.appendChild(
-              button("Rotate Token", "", async () => {
-                if (!confirm("确认 rotate client_id=" + item.id + " ? 新 token 仅返回一次。")) return;
-                try {
-                  const r = await api("POST", "/admin/clients/" + item.id + "/rotate");
-                  setStatus("ok", "rotate 成功（请立即复制 token）", r);
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-            actionTd.appendChild(
-              button(item.is_active ? "禁用" : "启用", "", async () => {
-                try {
-                  await api("PUT", "/admin/clients/" + item.id, { is_active: !item.is_active });
-                  await loadClients();
-                  setStatus("ok", "已更新 client_id=" + item.id);
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-            actionTd.appendChild(
-              button("删除(软禁用)", "danger", async () => {
-                if (!confirm("确认软禁用 client_id=" + item.id + " ?")) return;
-                try {
-                  await api("DELETE", "/admin/clients/" + item.id);
-                  await loadClients();
-                  setStatus("ok", "已软禁用 client_id=" + item.id);
-                } catch (e) {
-                  setStatus("err", String(e.message || e));
-                }
-              })
-            );
-
-            tr.appendChild(actionTd);
-            tbody.appendChild(tr);
-          }
-          setStatus("ok", "clients 加载完成，共 " + items.length + " 条。");
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function createClient() {
-        try {
-          const name = String($("clientName").value || "").trim();
-          if (!name) throw new Error("client.name 必填");
-
-          const quotaRaw = String($("clientQuota").value || "").trim();
-          const payload = {
-            name,
-            daily_quota: quotaRaw ? Number(quotaRaw) : null,
-            rate_limit_per_min: Number(String($("clientRpm").value || "60")),
-            max_concurrent: Number(String($("clientConc").value || "10")),
-            is_active: $("clientActive").value === "true",
-          };
-          setStatus("warn", "创建 client 中…");
-          const r = await api("POST", "/admin/clients", payload);
-          setStatus("ok", "创建成功（token 仅返回一次，请立即复制）", r);
-          $("clientName").value = "";
-          $("clientQuota").value = "";
-          await loadClients();
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function updateClient() {
-        try {
-          const clientId = Number($("clientEditId").value || "0");
-          if (!clientId) throw new Error("请先选择要更新的 client");
-
-          const payload = {};
-          const quota = parseOptionalNumber($("clientEditQuota").value);
-          const rpm = parseOptionalNumber($("clientEditRpm").value);
-          const conc = parseOptionalNumber($("clientEditConc").value);
-          const isActive = parseOptionalBool($("clientEditActive").value);
-
-          if ($("clientEditQuota").value !== "") payload.daily_quota = quota ?? null;
-          if (rpm !== undefined) payload.rate_limit_per_min = rpm;
-          if (conc !== undefined) payload.max_concurrent = conc;
-          if (isActive !== undefined) payload.is_active = isActive;
-
-          if (Object.keys(payload).length === 0) throw new Error("没有可更新字段（都为空）");
-
-          setStatus("warn", "更新 client 中…");
-          await api("PUT", "/admin/clients/" + clientId, payload);
-          await loadClients();
-          setStatus("ok", "已更新 client_id=" + clientId);
-        } catch (e) {
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      async function loadStats() {
-        try {
-          setStatus("warn", "加载 stats 中…");
-          const body = await api("GET", "/admin/stats");
-          $("statsBox").className = "status-ok";
-          $("statsBox").textContent = JSON.stringify(body, null, 2);
-          setStatus("ok", "stats 加载完成。");
-        } catch (e) {
-          $("statsBox").className = "status-err";
-          $("statsBox").textContent = String(e.message || e);
-          setStatus("err", String(e.message || e));
-        }
-      }
-
-      $("btnSetToken").addEventListener("click", setTokenFromInput);
-      $("btnClearToken").addEventListener("click", clearToken);
-      $("btnKeysRefresh").addEventListener("click", loadKeys);
-      $("btnKeysResetQuota").addEventListener("click", resetKeysQuota);
-      $("btnKeyCreate").addEventListener("click", createKey);
-      $("btnKeyUpdate").addEventListener("click", updateKey);
-      $("btnClientsRefresh").addEventListener("click", loadClients);
-      $("btnClientCreate").addEventListener("click", createClient);
-      $("btnClientUpdate").addEventListener("click", updateClient);
-      $("btnStatsLoad").addEventListener("click", loadStats);
-
-      $("tokenHint").textContent = "未设置";
-    </script>
+    <script defer src="./app.js"></script>
   </body>
 </html>
-

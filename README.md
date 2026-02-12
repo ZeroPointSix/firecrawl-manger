@@ -6,6 +6,7 @@ FCAM 是一个可容器化部署的轻量级 HTTP 网关，用于集中管理多
 
 - 技术方案/语义/失败策略/开发规则：`agent.md`
 - API 接口契约（请求/响应/错误体/分页/示例）：`Firecrawl-API-Manager-API-Contract.md`
+- API 使用指南（面向调用方/运维，上手/配置/示例）：`API-Usage.md`
 - 实施代办清单（里程碑顺序）：`TD.md`（`TODO.md` 仅兼容入口）
 - 产品需求：`Firecrawl-API-Manager-PRD.md`
 
@@ -25,7 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/bootstrap-python.ps
 
 浏览器入口：
 - Swagger：`GET /docs`（`server.enable_docs=true`）
-- 最小内置 WebUI：`GET /ui/`（`server.enable_control_plane=true`；页面内输入 `FCAM_ADMIN_TOKEN` 调用 `/admin/*`）
+- 内置 WebUI：`GET /ui/`（`server.enable_control_plane=true`；顶部横向标签：概览/Keys/Clients/Logs/Audit/帮助；Admin Token 可配置持久化/过期；Dashboard 提供 `/api/scrape` 端到端自检）
 
 ### 通用（已安装 Python）
 
@@ -78,7 +79,7 @@ docker compose up --build
 - 你在 Swagger（`/docs`）里直接点 `Try it out` 调 `/admin/*`：Swagger 默认不会自动加 `Authorization` 头，因此会 401（推荐改用 `/ui/` 或命令行请求）。
 - 你访问的是“另一个端口/另一个进程”的实例（例如本机 `8000/8001` 已被占用），该实例的 `FCAM_ADMIN_TOKEN` 与你输入的不一致。
 - 你在某个 PowerShell 窗口里设置了 `$env:FCAM_ADMIN_TOKEN=...`，但 uvicorn 是在**另一个窗口**启动的（环境变量只对当前进程/子进程生效）。
-- `/ui/` 页面刷新后 token 会丢失（本 UI 仅内存保存），需要重新输入并点击“保存到内存”。
+- `/ui/` 如选择“仅本次（内存）”或 token 已过期/被清空，需要重新输入并点击“保存”。
 
 自检（PowerShell 示例，注意不要在工单/群里粘贴明文 token）：
 ```powershell

@@ -186,6 +186,8 @@ M5 DoD（完成标志）：
 ## 8. M6（可选）：最小内置 WebUI（/ui）
 - [x] 仅在 `server.enable_control_plane=true` 时挂载 `/ui`（静态页面）
 - [x] WebUI 只做“最小可用”的 Key/Client 管理（复用现有 `/admin/*`），不新增后端业务语义
-- [x] Admin Token 仅在浏览器内存中保存（刷新后需重新输入），避免默认持久化带来的泄露面
-- [x] 测试：控制面开启时 `/ui/` 返回 HTML；控制面关闭时 `/ui/` 返回 404
+- [x] UI 形态：顶部横向 Tabs + 主区分屏（列表/详情）；支持 Logs/Audit 只读查询（复用 `/admin/logs`、`/admin/audit-logs`）
+- [x] Admin Token 支持同标签页/本机持久化（可配置过期）并提供一键清空；默认同标签页保存以减少重复输入
+- [x] 静态资源本地化：`app/ui/index.html` + `app/ui/app.css` + `app/ui/app.js`（不依赖 CDN/构建工具）
+- [x] 测试：控制面开启时 `/ui/` 返回 HTML 且静态资源可访问；控制面关闭时 `/ui/` 返回 404
 - [x] 文档：`README.md` 增加 `/ui/` 入口说明；`WORKLOG.md` 记录选择与验证结果

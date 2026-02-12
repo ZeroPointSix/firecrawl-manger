@@ -1,0 +1,724 @@
+<!doctype html>
+<!-- Legacy UI (v1). Kept for reference (not served by /ui). -->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FCAM WebUI</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
+        margin: 24px;
+        line-height: 1.4;
+      }
+      h1 {
+        margin: 0 0 12px 0;
+        font-size: 20px;
+      }
+      h2 {
+        margin: 18px 0 10px 0;
+        font-size: 16px;
+      }
+      .muted {
+        opacity: 0.8;
+        font-size: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        align-items: end;
+      }
+      .card {
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        border-radius: 10px;
+        padding: 12px;
+        margin: 12px 0;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        margin-bottom: 6px;
+        opacity: 0.85;
+      }
+      input,
+      select {
+        padding: 8px;
+        border-radius: 8px;
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        min-width: 180px;
+      }
+      input[type="number"] {
+        min-width: 120px;
+      }
+      button {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(127, 127, 127, 0.35);
+        background: transparent;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: rgba(45, 140, 255, 0.6);
+      }
+      button.danger {
+        border-color: rgba(255, 80, 80, 0.7);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid rgba(127, 127, 127, 0.25);
+        text-align: left;
+        padding: 8px 6px;
+        vertical-align: top;
+      }
+      th {
+        position: sticky;
+        top: 0;
+        background: Canvas;
+        z-index: 1;
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        background: rgba(127, 127, 127, 0.08);
+        padding: 10px;
+        border-radius: 10px;
+      }
+      .status-ok {
+        border-left: 4px solid rgba(60, 180, 75, 0.8);
+        padding-left: 10px;
+      }
+      .status-warn {
+        border-left: 4px solid rgba(255, 165, 0, 0.8);
+        padding-left: 10px;
+      }
+      .status-err {
+        border-left: 4px solid rgba(255, 80, 80, 0.8);
+        padding-left: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>FCAM WebUI（最小可用）</h1>
+    <div class="muted">
+      仅用于调用现有 <span class="mono">/admin/*</span> 控制面；本页面不会持久化 Admin Token（刷新后需重新输入）。
+      建议只在内网/控制面实例暴露。
+    </div>
+
+    <div class="card">
+      <h2>连接</h2>
+      <div class="row">
+        <div>
+          <label for="adminToken">Admin Token（环境变量：FCAM_ADMIN_TOKEN）</label>
+          <input id="adminToken" type="password" placeholder="dev_admin_token" />
+        </div>
+        <div>
+          <button id="btnSetToken" class="primary">保存到内存</button>
+          <button id="btnClearToken">清空</button>
+        </div>
+        <div class="muted" id="tokenHint"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>状态</h2>
+      <pre id="statusBox" class="status-warn">尚未请求。</pre>
+    </div>
+
+    <div class="card">
+      <h2>API Keys</h2>
+      <div class="row">
+        <button id="btnKeysRefresh" class="primary">刷新列表</button>
+        <button id="btnKeysResetQuota">重置今日配额（全部）</button>
+      </div>
+
+      <h3 class="muted">创建 Key</h3>
+      <div class="row">
+        <div>
+          <label for="keyApiKey">api_key</label>
+          <input id="keyApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" />
+        </div>
+        <div>
+          <label for="keyName">name</label>
+          <input id="keyName" placeholder="free-01" />
+        </div>
+        <div>
+          <label for="keyPlan">plan_type</label>
+          <input id="keyPlan" value="free" />
+        </div>
+        <div>
+          <label for="keyQuota">daily_quota</label>
+          <input id="keyQuota" type="number" value="5" />
+        </div>
+        <div>
+          <label for="keyConc">max_concurrent</label>
+          <input id="keyConc" type="number" value="2" />
+        </div>
+        <div>
+          <label for="keyRpm">rate_limit_per_min</label>
+          <input id="keyRpm" type="number" value="10" />
+        </div>
+        <div>
+          <label for="keyActive">is_active</label>
+          <select id="keyActive">
+            <option value="true" selected>True</option>
+            <option value="false">False</option>
+          </select>
+        </div>
+        <div>
+          <button id="btnKeyCreate" class="primary">创建</button>
+        </div>
+      </div>
+
+      <h3 class="muted">更新 Key</h3>
+      <div class="row">
+        <div>
+          <label for="keyEditId">key_id</label>
+          <input id="keyEditId" type="number" placeholder="选择一行后自动填充" disabled />
+        </div>
+        <div>
+          <label for="keyEditName">name</label>
+          <input id="keyEditName" placeholder="可选" />
+        </div>
+        <div>
+          <label for="keyEditPlan">plan_type</label>
+          <input id="keyEditPlan" placeholder="可选" />
+        </div>
+        <div>
+          <label for="keyEditQuota">daily_quota</label>
+          <input id="keyEditQuota" type="number" placeholder="可选" />
+        </div>
+        <div>
+          <label for="keyEditConc">max_concurrent</label>
+          <input id="keyEditConc" type="number" placeholder="可选" />
+        </div>
+        <div>
+          <label for="keyEditRpm">rate_limit_per_min</label>
+          <input id="keyEditRpm" type="number" placeholder="可选" />
+        </div>
+        <div>
+          <label for="keyEditActive">is_active</label>
+          <select id="keyEditActive">
+            <option value="" selected>（不修改）</option>
+            <option value="true">True</option>
+            <option value="false">False</option>
+          </select>
+        </div>
+        <div>
+          <button id="btnKeyUpdate" class="primary">保存修改</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 10px; overflow: auto">
+        <table>
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>name</th>
+              <th>masked</th>
+              <th>status</th>
+              <th>active</th>
+              <th>usage/quota</th>
+              <th>conc</th>
+              <th>rpm</th>
+              <th>cooldown</th>
+              <th>last_used</th>
+              <th>actions</th>
+            </tr>
+          </thead>
+          <tbody id="keysTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Clients</h2>
+      <div class="row">
+        <button id="btnClientsRefresh" class="primary">刷新列表</button>
+      </div>
+
+      <h3 class="muted">创建 Client</h3>
+      <div class="row">
+        <div>
+          <label for="clientName">name</label>
+          <input id="clientName" placeholder="service-a" />
+        </div>
+        <div>
+          <label for="clientQuota">daily_quota（可空）</label>
+          <input id="clientQuota" type="number" placeholder="" />
+        </div>
+        <div>
+          <label for="clientRpm">rate_limit_per_min</label>
+          <input id="clientRpm" type="number" value="60" />
+        </div>
+        <div>
+          <label for="clientConc">max_concurrent</label>
+          <input id="clientConc" type="number" value="10" />
+        </div>
+        <div>
+          <label for="clientActive">is_active</label>
+          <select id="clientActive">
+            <option value="true" selected>True</option>
+            <option value="false">False</option>
+          </select>
+        </div>
+        <div>
+          <button id="btnClientCreate" class="primary">创建</button>
+        </div>
+      </div>
+
+      <h3 class="muted">更新 Client</h3>
+      <div class="row">
+        <div>
+          <label for="clientEditId">client_id</label>
+          <input id="clientEditId" type="number" placeholder="选择一行后自动填充" disabled />
+        </div>
+        <div>
+          <label for="clientEditQuota">daily_quota（可空）</label>
+          <input id="clientEditQuota" type="number" placeholder="不修改请留空" />
+        </div>
+        <div>
+          <label for="clientEditRpm">rate_limit_per_min</label>
+          <input id="clientEditRpm" type="number" placeholder="不修改请留空" />
+        </div>
+        <div>
+          <label for="clientEditConc">max_concurrent</label>
+          <input id="clientEditConc" type="number" placeholder="不修改请留空" />
+        </div>
+        <div>
+          <label for="clientEditActive">is_active</label>
+          <select id="clientEditActive">
+            <option value="" selected>（不修改）</option>
+            <option value="true">True</option>
+            <option value="false">False</option>
+          </select>
+        </div>
+        <div>
+          <button id="btnClientUpdate" class="primary">保存修改</button>
+        </div>
+      </div>
+
+      <div style="margin-top: 10px; overflow: auto">
+        <table>
+          <thead>
+            <tr>
+              <th>id</th>
+              <th>name</th>
+              <th>active</th>
+              <th>usage/quota</th>
+              <th>rpm</th>
+              <th>conc</th>
+              <th>created</th>
+              <th>last_used</th>
+              <th>actions</th>
+            </tr>
+          </thead>
+          <tbody id="clientsTbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="row">
+        <button id="btnStatsLoad" class="primary">加载 /admin/stats</button>
+      </div>
+      <pre id="statsBox" class="status-warn">尚未加载。</pre>
+    </div>
+
+    <script>
+      "use strict";
+
+      let adminToken = "";
+
+      function $(id) {
+        return document.getElementById(id);
+      }
+
+      function setStatus(kind, message, details) {
+        const box = $("statusBox");
+        box.className = kind === "ok" ? "status-ok" : kind === "err" ? "status-err" : "status-warn";
+        if (details) {
+          box.textContent = message + "\n\n" + JSON.stringify(details, null, 2);
+        } else {
+          box.textContent = message;
+        }
+      }
+
+      function requireToken() {
+        if (!adminToken) {
+          throw new Error("请先设置 Admin Token（FCAM_ADMIN_TOKEN）");
+        }
+      }
+
+      async function api(method, path, body) {
+        requireToken();
+        const headers = { Authorization: "Bearer " + adminToken, Accept: "application/json" };
+        const opts = { method, headers };
+        if (body !== undefined) {
+          headers["Content-Type"] = "application/json";
+          opts.body = JSON.stringify(body);
+        }
+        const resp = await fetch(path, opts);
+        const isJson = (resp.headers.get("content-type") || "").includes("application/json");
+        const payload = isJson ? await resp.json() : await resp.text();
+        if (!resp.ok) {
+          const err = isJson ? payload : { error: { code: "HTTP_ERROR", message: String(payload) } };
+          throw new Error((err && err.error && err.error.code ? err.error.code + ": " : "") + (err.error?.message || "请求失败"));
+        }
+        return payload;
+      }
+
+      function td(text) {
+        const el = document.createElement("td");
+        el.textContent = text == null ? "" : String(text);
+        return el;
+      }
+
+      function button(text, cls, onClick) {
+        const b = document.createElement("button");
+        if (cls) b.className = cls;
+        b.type = "button";
+        b.textContent = text;
+        b.addEventListener("click", onClick);
+        return b;
+      }
+
+      function parseOptionalNumber(value) {
+        const raw = String(value || "").trim();
+        if (!raw) return undefined;
+        const n = Number(raw);
+        if (!Number.isFinite(n)) throw new Error("数字字段非法: " + raw);
+        return n;
+      }
+
+      function parseOptionalBool(value) {
+        if (value === "true") return true;
+        if (value === "false") return false;
+        return undefined;
+      }
+
+      function setTokenFromInput() {
+        adminToken = String($("adminToken").value || "").trim();
+        $("tokenHint").textContent = adminToken ? "已设置（仅内存）" : "未设置";
+        setStatus("ok", adminToken ? "Admin Token 已设置（仅内存）。" : "Admin Token 已清空。");
+      }
+
+      function clearToken() {
+        adminToken = "";
+        $("adminToken").value = "";
+        $("tokenHint").textContent = "未设置";
+        setStatus("warn", "Admin Token 已清空。");
+      }
+
+      function fillKeyEditForm(item) {
+        $("keyEditId").value = item.id;
+        $("keyEditName").value = item.name || "";
+        $("keyEditPlan").value = item.plan_type || "";
+        $("keyEditQuota").value = item.daily_quota ?? "";
+        $("keyEditConc").value = item.max_concurrent ?? "";
+        $("keyEditRpm").value = item.rate_limit_per_min ?? "";
+        $("keyEditActive").value = "";
+      }
+
+      function fillClientEditForm(item) {
+        $("clientEditId").value = item.id;
+        $("clientEditQuota").value = item.daily_quota ?? "";
+        $("clientEditRpm").value = item.rate_limit_per_min ?? "";
+        $("clientEditConc").value = item.max_concurrent ?? "";
+        $("clientEditActive").value = "";
+      }
+
+      async function loadKeys() {
+        try {
+          setStatus("warn", "加载 keys 中…");
+          const body = await api("GET", "/admin/keys");
+          const items = body.items || [];
+          const tbody = $("keysTbody");
+          tbody.textContent = "";
+          for (const item of items) {
+            const tr = document.createElement("tr");
+            tr.appendChild(td(item.id));
+            tr.appendChild(td(item.name || ""));
+            tr.appendChild(td(item.api_key_masked || ""));
+            tr.appendChild(td(item.status || ""));
+            tr.appendChild(td(item.is_active));
+            tr.appendChild(td(String(item.daily_usage ?? 0) + "/" + String(item.daily_quota ?? 0)));
+            tr.appendChild(td(String(item.current_concurrent ?? 0) + "/" + String(item.max_concurrent ?? 0)));
+            tr.appendChild(td(item.rate_limit_per_min ?? ""));
+            tr.appendChild(td(item.cooldown_until || ""));
+            tr.appendChild(td(item.last_used_at || ""));
+
+            const actionTd = document.createElement("td");
+            actionTd.appendChild(
+              button("选择", "", () => {
+                fillKeyEditForm(item);
+                setStatus("ok", "已选中 key_id=" + item.id);
+              })
+            );
+            actionTd.appendChild(
+              button(item.is_active ? "禁用" : "启用", "", async () => {
+                try {
+                  await api("PUT", "/admin/keys/" + item.id, { is_active: !item.is_active });
+                  await loadKeys();
+                  setStatus("ok", "已更新 key_id=" + item.id);
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+            actionTd.appendChild(
+              button("测试", "", async () => {
+                try {
+                  const r = await api("POST", "/admin/keys/" + item.id + "/test", { mode: "scrape", test_url: "https://example.com" });
+                  setStatus("ok", "测试完成 key_id=" + item.id, r);
+                  await loadKeys();
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+            actionTd.appendChild(
+              button("删除(软禁用)", "danger", async () => {
+                if (!confirm("确认软禁用 key_id=" + item.id + " ?")) return;
+                try {
+                  await api("DELETE", "/admin/keys/" + item.id);
+                  await loadKeys();
+                  setStatus("ok", "已软禁用 key_id=" + item.id);
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+            tr.appendChild(actionTd);
+            tbody.appendChild(tr);
+          }
+          setStatus("ok", "keys 加载完成，共 " + items.length + " 条。");
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function createKey() {
+        try {
+          const payload = {
+            api_key: String($("keyApiKey").value || "").trim(),
+            name: String($("keyName").value || "").trim() || null,
+            plan_type: String($("keyPlan").value || "free").trim() || "free",
+            daily_quota: Number(String($("keyQuota").value || "0")),
+            max_concurrent: Number(String($("keyConc").value || "0")),
+            rate_limit_per_min: Number(String($("keyRpm").value || "0")),
+            is_active: $("keyActive").value === "true",
+          };
+          setStatus("warn", "创建 key 中…");
+          const r = await api("POST", "/admin/keys", payload);
+          setStatus("ok", "创建成功 key_id=" + r.id);
+          $("keyApiKey").value = "";
+          await loadKeys();
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function updateKey() {
+        try {
+          const keyId = Number($("keyEditId").value || "0");
+          if (!keyId) throw new Error("请先选择要更新的 key");
+
+          const payload = {};
+          const name = String($("keyEditName").value || "").trim();
+          const plan = String($("keyEditPlan").value || "").trim();
+          if (name) payload.name = name;
+          if (plan) payload.plan_type = plan;
+          const quota = parseOptionalNumber($("keyEditQuota").value);
+          const conc = parseOptionalNumber($("keyEditConc").value);
+          const rpm = parseOptionalNumber($("keyEditRpm").value);
+          const isActive = parseOptionalBool($("keyEditActive").value);
+          if (quota !== undefined) payload.daily_quota = quota;
+          if (conc !== undefined) payload.max_concurrent = conc;
+          if (rpm !== undefined) payload.rate_limit_per_min = rpm;
+          if (isActive !== undefined) payload.is_active = isActive;
+
+          if (Object.keys(payload).length === 0) throw new Error("没有可更新字段（都为空）");
+
+          setStatus("warn", "更新 key 中…");
+          await api("PUT", "/admin/keys/" + keyId, payload);
+          await loadKeys();
+          setStatus("ok", "已更新 key_id=" + keyId);
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function resetKeysQuota() {
+        try {
+          setStatus("warn", "重置 keys 配额中…");
+          const r = await api("POST", "/admin/keys/reset-quota");
+          setStatus("ok", "重置完成。", r);
+          await loadKeys();
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function loadClients() {
+        try {
+          setStatus("warn", "加载 clients 中…");
+          const body = await api("GET", "/admin/clients");
+          const items = body.items || [];
+          const tbody = $("clientsTbody");
+          tbody.textContent = "";
+          for (const item of items) {
+            const tr = document.createElement("tr");
+            tr.appendChild(td(item.id));
+            tr.appendChild(td(item.name || ""));
+            tr.appendChild(td(item.is_active));
+            tr.appendChild(td(String(item.daily_usage ?? 0) + "/" + String(item.daily_quota ?? "")));
+            tr.appendChild(td(item.rate_limit_per_min ?? ""));
+            tr.appendChild(td(item.max_concurrent ?? ""));
+            tr.appendChild(td(item.created_at || ""));
+            tr.appendChild(td(item.last_used_at || ""));
+
+            const actionTd = document.createElement("td");
+            actionTd.appendChild(
+              button("选择", "", () => {
+                fillClientEditForm(item);
+                setStatus("ok", "已选中 client_id=" + item.id);
+              })
+            );
+            actionTd.appendChild(
+              button("Rotate Token", "", async () => {
+                if (!confirm("确认 rotate client_id=" + item.id + " ? 新 token 仅返回一次。")) return;
+                try {
+                  const r = await api("POST", "/admin/clients/" + item.id + "/rotate");
+                  setStatus("ok", "rotate 成功（请立即复制 token）", r);
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+            actionTd.appendChild(
+              button(item.is_active ? "禁用" : "启用", "", async () => {
+                try {
+                  await api("PUT", "/admin/clients/" + item.id, { is_active: !item.is_active });
+                  await loadClients();
+                  setStatus("ok", "已更新 client_id=" + item.id);
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+            actionTd.appendChild(
+              button("删除(软禁用)", "danger", async () => {
+                if (!confirm("确认软禁用 client_id=" + item.id + " ?")) return;
+                try {
+                  await api("DELETE", "/admin/clients/" + item.id);
+                  await loadClients();
+                  setStatus("ok", "已软禁用 client_id=" + item.id);
+                } catch (e) {
+                  setStatus("err", String(e.message || e));
+                }
+              })
+            );
+
+            tr.appendChild(actionTd);
+            tbody.appendChild(tr);
+          }
+          setStatus("ok", "clients 加载完成，共 " + items.length + " 条。");
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function createClient() {
+        try {
+          const name = String($("clientName").value || "").trim();
+          if (!name) throw new Error("client.name 必填");
+
+          const quotaRaw = String($("clientQuota").value || "").trim();
+          const payload = {
+            name,
+            daily_quota: quotaRaw ? Number(quotaRaw) : null,
+            rate_limit_per_min: Number(String($("clientRpm").value || "60")),
+            max_concurrent: Number(String($("clientConc").value || "10")),
+            is_active: $("clientActive").value === "true",
+          };
+          setStatus("warn", "创建 client 中…");
+          const r = await api("POST", "/admin/clients", payload);
+          setStatus("ok", "创建成功（token 仅返回一次，请立即复制）", r);
+          $("clientName").value = "";
+          $("clientQuota").value = "";
+          await loadClients();
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function updateClient() {
+        try {
+          const clientId = Number($("clientEditId").value || "0");
+          if (!clientId) throw new Error("请先选择要更新的 client");
+
+          const payload = {};
+          const quota = parseOptionalNumber($("clientEditQuota").value);
+          const rpm = parseOptionalNumber($("clientEditRpm").value);
+          const conc = parseOptionalNumber($("clientEditConc").value);
+          const isActive = parseOptionalBool($("clientEditActive").value);
+
+          if ($("clientEditQuota").value !== "") payload.daily_quota = quota ?? null;
+          if (rpm !== undefined) payload.rate_limit_per_min = rpm;
+          if (conc !== undefined) payload.max_concurrent = conc;
+          if (isActive !== undefined) payload.is_active = isActive;
+
+          if (Object.keys(payload).length === 0) throw new Error("没有可更新字段（都为空）");
+
+          setStatus("warn", "更新 client 中…");
+          await api("PUT", "/admin/clients/" + clientId, payload);
+          await loadClients();
+          setStatus("ok", "已更新 client_id=" + clientId);
+        } catch (e) {
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      async function loadStats() {
+        try {
+          setStatus("warn", "加载 stats 中…");
+          const body = await api("GET", "/admin/stats");
+          $("statsBox").className = "status-ok";
+          $("statsBox").textContent = JSON.stringify(body, null, 2);
+          setStatus("ok", "stats 加载完成。");
+        } catch (e) {
+          $("statsBox").className = "status-err";
+          $("statsBox").textContent = String(e.message || e);
+          setStatus("err", String(e.message || e));
+        }
+      }
+
+      $("btnSetToken").addEventListener("click", setTokenFromInput);
+      $("btnClearToken").addEventListener("click", clearToken);
+      $("btnKeysRefresh").addEventListener("click", loadKeys);
+      $("btnKeysResetQuota").addEventListener("click", resetKeysQuota);
+      $("btnKeyCreate").addEventListener("click", createKey);
+      $("btnKeyUpdate").addEventListener("click", updateKey);
+      $("btnClientsRefresh").addEventListener("click", loadClients);
+      $("btnClientCreate").addEventListener("click", createClient);
+      $("btnClientUpdate").addEventListener("click", updateClient);
+      $("btnStatsLoad").addEventListener("click", loadStats);
+
+      $("tokenHint").textContent = "未设置";
+    </script>
+  </body>
+</html>

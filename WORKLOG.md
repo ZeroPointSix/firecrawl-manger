@@ -159,8 +159,65 @@
 - Token 默认不落本地存储（localStorage/sessionStorage），降低误操作导致的长期泄露面（如需持久化再显式扩展）。
 
 **本次验证结果**
-- `pytest "tests/test_ui.py"`：通过（控制面开关覆盖：200 HTML / 404 NOT_FOUND）
+- `pytest "tests/test_ui.py"`：通过（控制面开关覆盖：200 HTML + 静态资源 / 404 NOT_FOUND）
 - `pytest --cov=app --cov-fail-under=80`：通过（92 passed；Total coverage 85.32%）
+
+### M6.1：WebUI 视觉重构（Dashboard 风格）
+
+**完成内容**
+- UI 重构为本地静态资源：`app/ui/index.html` + `app/ui/app.css` + `app/ui/app.js`
+- 交互形态：侧边栏多标签（dashboard/keys/clients/logs/audit/help）+ 主区分屏（列表/详情）
+- 运维可视化补齐：在 UI 内直接查询 `request_logs`（`/admin/logs`）与 `audit_logs`（`/admin/audit-logs`）
+- 连接校验复用 `/admin/stats`：验证成功后同时回填 Dashboard 输出，避免“连接成功但概览仍未加载”的困惑
+- 修正视图切换隐藏逻辑：仅切换 `.view[data-view]` 区块，不影响侧边栏导航常驻
+- 旧版 UI 快照保留：`app/ui.v1.html`（不再由 `/ui/` 提供，仅用于对照/回滚）
+
+**关键选择（KISS/安全默认）**
+- 不依赖 CDN 与构建工具（NPM/bundle），避免内网/离线环境下 UI 失效；同时减少供应链暴露面。
+- 仍坚持“不新增 UI 专用后端 API”，所有操作都复用既有 `/admin/*`（保持契约单一事实来源）。
+
+**本次验证结果**
+- `pytest "tests/test_ui.py"`：通过（含 `/ui/app.css`、`/ui/app.js` 可访问断言）
+
+### M6.2：WebUI 导航布局调整（顶部横向 Tabs）
+
+**完成内容**
+- 导航从“侧边栏竖向列表”改为“顶部横向 Tabs”（概览 / API Keys / Clients / 请求日志 / 审计日志 / 帮助）。
+- 页面布局改为“固定 Header + 主内容区滚动”，减少整页长滚动，保持各视图通过 Tabs 完整隔离切换。
+- 修复 Tabs 切换不生效：补齐 CSS `[hidden]{display:none !important}`，避免 `.view{display:block}` 覆盖 `hidden` 属性导致所有视图同时显示。
+- UI 测试补强：断言 HTML 中包含 Tabs 与各 `data-view` 按钮，避免导航结构回归。
+
+**关键选择（KISS/DRY）**
+- 保持原有 `data-view` + `.nav-item` 的视图切换机制不变，仅调整 DOM 位置与 CSS（降低 JS 回归风险）。
+- 使用标准 `hidden` 属性做视图隔离，并在 CSS 中显式约束 `[hidden]`（避免不同浏览器/样式覆盖导致的渲染差异）。
+- 不引入任何前端构建链路/外部依赖（继续离线可用，减少供应链暴露面）。
+
+**本次验证结果**
+- `pytest --cov=app --cov-fail-under=80`：通过（93 passed；Total coverage 85.32%）
+
+### M6.3：WebUI Token 持久化 + 前端日志 + 可配置 Key Test
+
+**完成内容**
+- Admin Token 支持持久化保存：
+  - 同标签页（`sessionStorage`，刷新不丢失）
+  - 本机持久（`localStorage`）
+  - 支持配置过期时间（小时）与一键清空（同时清理两类存储）。
+- 增强可观测性：在「帮助」页增加“前端日志”面板，记录 UI 内部请求/错误/状态变化（不记录任何 token）。
+- 增强验证能力：Key Test 支持配置 `test_url`，默认 `https://www.google.com`（仍可按环境改为 `https://example.com` 等）。
+- 增加端到端验证入口：Dashboard 新增「数据面自检（/api/scrape）」表单，可粘贴 Client Token + `test_url` 直接验证转发链路（不持久化 Client Token）。
+
+**关键选择（KISS/安全默认）**
+- token 默认保存方式选择“同标签页”，避免“刷新即丢失”的操作摩擦，同时比 `localStorage` 更少长期泄露面；如确需跨重启持久化，再显式选择 `localStorage`。
+- 所有日志与错误展示均避免输出 token（仅记录 method/path/status/耗时/错误码）。
+- 不新增任何 UI 专用后端接口：仍复用 `/admin/*` 与 `/admin/keys/{id}/test`（DRY）。
+
+**本次验证结果**
+- `pytest --cov=app --cov-fail-under=80`：通过（93 passed；Total coverage 85.32%）
+
+**排查记录（日志核对）**
+- 数据库存储：`data/api_manager.db`（`config.yaml: database.path` 默认值）。
+- `request_logs.count=0`：说明该实例尚未收到任何 `/api/*` 数据面请求（因此“请求日志”页为空属预期）。
+- `audit_logs` 最新包含多次 `key.test`（例如 `2026-02-11 15:17:59Z`，`resource_id=1`）：说明已触发控制面 Key Test，服务端会向上游 `POST {firecrawl.base_url}/scrape` 发起探测请求。
 
 ### Runbook：端口冲突时启动（示例：18000）
 
@@ -177,3 +234,15 @@
 - `GET /readyz` → 200
 - `GET /ui/` → 200（HTML）
 - `GET /docs` → 200（HTML）
+
+### API 使用指南（面向调用方/运维）
+
+**完成内容**
+- 新增 `API-Usage.md`：涵盖启动/配置、Key 池管理、Client Token 发放、`/api/*` 调用（scrape/crawl/agent）与测试路径。
+
+**关键选择（KISS/DRY）**
+- “字段/错误体/分页”等契约细节仍以 `Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；`API-Usage.md` 只聚焦上手与调用姿势，避免文档漂移。
+
+**本次验证结果**
+- `pytest -q tests/test_api_data_plane.py::test_api_endpoints_forward_to_expected_upstream ...`：通过（MockTransport 模拟上游，覆盖 scrape/crawl/agent 转发路径与幂等行为）
+- `pytest --cov=app --cov-fail-under=80`：通过（93 passed；Total coverage 85.32%）
