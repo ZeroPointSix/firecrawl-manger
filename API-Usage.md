@@ -146,6 +146,20 @@ HTTP：
 - 路径白名单：默认只允许 `scrape|crawl|search|agent`（其他会返回 `PATH_NOT_ALLOWED`）
 - 建议你自己传 `X-Request-Id`（便于对齐网关日志）；不传则网关自动生成并通过响应头回传。
 
+### 4.1.1 Firecrawl SDK/原生 API 兼容路径（推荐用于迁移）
+
+除了 `/api/*` 之外，FCAM 还提供一组 **兼容 Firecrawl `/v1/*` 路径** 的转发端点（用于“尽量少改代码”的迁移场景）：
+
+- `POST /v1/scrape`
+- `POST /v1/crawl`
+- `GET  /v1/crawl/{id}`
+- `POST /v1/search`
+- `POST /v1/agent`
+
+注意：
+- 鉴权仍然是 `Authorization: Bearer <CLIENT_TOKEN>`（**不是** Firecrawl Key）。
+- 当前兼容层只覆盖上述端点；如 SDK 使用了其它 Firecrawl 能力，请按需在 FCAM 补齐或在业务侧改用直接 HTTP 调用 `/api/*`。
+
 ### 4.2 scrape（单次抓取，通常同步返回）
 
 - `POST /api/scrape`
@@ -193,7 +207,7 @@ Invoke-RestMethod -Method POST -Uri "$origin/api/crawl" -Headers $h -ContentType
 本仓库测试使用 `httpx.MockTransport` 模拟上游，验证：
 - `/api/scrape`、`/api/crawl`、`/api/agent` 确实转发到期望的上游路径（如 `/v1/scrape`）
 - 幂等键逻辑（crawl/agent）可正确 replay / conflict
-- `request_logs` 会记录 `/api/*` 入站请求
+- `request_logs` 会记录数据面入站请求（`/api/*` 与 `/v1/*`）
 
 运行：
 ```bash
@@ -210,5 +224,100 @@ pytest -q tests/test_api_data_plane.py
 - 控制面已配置至少 1 把可用 Firecrawl Key（可用 `/admin/keys/{id}/test` 验证 `ok=true`）。
 - 已发放 Client Token。
 
-然后业务方直接调用 `/api/*` 即可；调用后可用 `/admin/logs` 查询本次请求记录。
+然后业务方直接调用 `/api/*` 或 `/v1/*` 即可；调用后可用 `/admin/logs` 查询本次请求记录。
 
+建议排障姿势：
+- 业务侧始终带上 `X-Request-Id`，并在失败时把该 ID 带给运维（无需提供任何 token）。
+- 运维使用 `/admin/logs?request_id=<id>` 精确定位一次调用；也可用 `/admin/logs?level=error&q=<keyword>` 快速聚焦异常（`q` 会在 `request_id/endpoint/error_message` 三个字段里模糊匹配）。
+
+### 5.4 仓库内 E2E（真实 HTTP，不用 TestClient）
+
+该模式用于“像线上一样发 HTTP 请求”，但默认 **不会真实调用 Firecrawl**（避免误触费用/配额）；仅验证 FCAM 自身行为与日志落库。
+
+```powershell
+$env:FCAM_E2E="1"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py"
+```
+
+如需验证“真实上游链路”（会真实调用 Firecrawl，请仅在隔离环境执行）：
+```powershell
+$env:FCAM_E2E="1"
+$env:FCAM_E2E_ALLOW_UPSTREAM="1"
+$env:FCAM_E2E_FIRECRAWL_API_KEY="<your_firecrawl_api_key>"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
+```
+
+如不想在命令行暴露 key，可在仓库根目录创建本地文件 `.env.e2e`（已被 `.gitignore` 忽略），写入：
+```text
+FCAM_E2E_FIRECRAWL_API_KEY=...
+FCAM_E2E_SCRAPE_URL=https://example.com
+```
+
+---
+
+## 6. 从 Firecrawl SDK 迁移到 FCAM（推荐路径：改 base_url + 换 token）
+
+目标：让业务服务继续用“熟悉的 SDK/调用方式”，但把 **鉴权与 Key 池治理** 迁移到 FCAM。
+
+### 6.1 迁移前后有什么变化？
+
+不变：
+- 请求 payload（字段含义以 Firecrawl 为准）
+- 成功响应与上游错误响应（默认透传）
+
+变化：
+- 你不再把 Firecrawl API Key 配到业务服务里；业务服务只持有 **Client Token**
+- 请求目标从 `https://api.firecrawl.dev/v1/*` 变成 `http(s)://<FCAM_HOST>/v1/*`（或直接 `/api/*`）
+- 可能会遇到 FCAM 自身的治理错误（限流/并发/配额/无 key 等），错误体见 `Firecrawl-API-Manager-API-Contract.md`
+
+### 6.2 最小改动迁移（强烈推荐）
+
+前提：
+- 运维已在 FCAM 配置好至少 1 把 Firecrawl Key（`POST /admin/keys`）
+- 运维为该服务创建了 Client（`POST /admin/clients`），并把返回的 `token` 发给服务方（只返回一次）
+
+业务侧改动：
+1) 把 “SDK 的 apiKey / token” 替换为 `Client Token`
+2) 把 “SDK 的 base_url / api_url / host” 指向 FCAM：
+   - 推荐：`http(s)://<FCAM_HOST>:<PORT>/v1`
+
+> 说明：我们提供 `/v1/*` 兼容层就是为了支持这种迁移方式；如果你的 SDK 允许配置 base_url，这基本就是“换个域名 + 换个 token”。
+
+### 6.3 如果 SDK 不支持自定义 base_url 怎么办？
+
+按工程实践建议优先级如下：
+
+1) **直接改用 HTTP 调用 FCAM（推荐）**
+   - 使用你现有的 HTTP client（axios/httpx/requests/fetch）
+   - 调用 `POST /api/scrape` / `POST /api/crawl` / `POST /api/agent` 等
+
+2) **封装一层“SDK Adapter”（可行，但需评估成本）**
+   - 如果 SDK 允许注入自定义 transport/fetch/axios 实例，可在该层把请求域名改写到 FCAM
+   - 同时确保 `Authorization: Bearer <CLIENT_TOKEN>` 被正确携带
+
+3) **不建议：hosts/DNS 劫持把 api.firecrawl.dev 指向 FCAM**
+   - 会遇到 TLS 证书不匹配问题，且非常容易引入不可控风险（除非你有完整的内网 CA 与流量治理体系）
+
+### 6.4 迁移上线清单（建议按顺序）
+
+1) 运维：
+   - 配置 `FCAM_ADMIN_TOKEN`、`FCAM_MASTER_KEY`（Master Key 必须稳定）
+   - 添加至少 1 把可用 Firecrawl Key，并用 `/admin/keys/{id}/test` 验证 `ok=true`
+   - 为业务服务创建 client，拿到 `client_token` 并写入 Secret 系统
+2) 业务：
+   - 把 “Firecrawl Key” 替换为 `client_token`
+   - 把 base_url 指向 FCAM `/v1`
+   - 为每次请求加 `X-Request-Id`，并在日志中透出该 ID
+   - crawl/agent 强制加 `X-Idempotency-Key`（防止重试重复创建）
+3) 验证：
+   - 发起一笔 `scrape`（或你的典型路径）
+   - 运维在 `/admin/logs?request_id=<id>` 中确认：`status_code=200`、`endpoint` 正确、`api_key_id` 已被选择
+
+### 6.5 回滚策略（务必准备）
+
+迁移的本质是“可配置项切换”（base_url + token），回滚也应该同样简单：
+- 将 base_url 切回 Firecrawl 官方地址
+- 将 token 切回原 Firecrawl API Key
+
+建议：
+- 上线窗口保留双配置（或灰度）能力，确保回滚可在分钟级完成

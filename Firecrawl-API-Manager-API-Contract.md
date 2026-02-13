@@ -397,6 +397,8 @@
 ### 2.14 GET /admin/logs — 请求日志查询（过滤 + 分页）
 **Auth**：Admin
 
+说明：记录数据面入站请求（`/api/*` 与 `/v1/*`）。
+
 **Query**
 - 分页：
   - `limit`：默认 50，最大 200
@@ -409,6 +411,8 @@
   - `endpoint`：`scrape|crawl|crawl_status|search|agent`
   - `status_code`：整数
   - `success`：`true|false`
+  - `level`：`info|warn|error`（按请求结果推导，用于快速筛选）
+  - `q`：模糊搜索（`request_id` / `endpoint` / `error_message`，大小写不敏感）
   - `request_id`：精确匹配
   - `idempotency_key`：精确匹配
 
@@ -419,6 +423,7 @@
     {
       "id": 10001,
       "created_at": "2026-02-10T06:33:21Z",
+      "level": "info",
       "request_id": "01JKXYZ...",
 
       "client_id": 1,
@@ -479,6 +484,18 @@
 ## 3. 数据面（/api/*）— 转发端点（兼容 Firecrawl）
 > 说明：这些接口的 **成功响应与上游错误响应**默认“透传”。  
 > 网关仅在“自身拦截/治理失败/无 Key”等场景返回 1.6 的错误体。
+
+### 3.0 Firecrawl 兼容层（/v1/*，用于 SDK 迁移）
+**Auth**：Client
+
+说明：为支持“尽量少改代码”的迁移场景，FCAM 额外提供一组与 Firecrawl 路径对齐的兼容端点：
+- `POST /v1/scrape`
+- `POST /v1/crawl`
+- `GET  /v1/crawl/{id}`
+- `POST /v1/search`
+- `POST /v1/agent`
+
+语义：与 `/api/*` 等价（仅路径不同），鉴权仍为 `Authorization: Bearer <CLIENT_TOKEN>`。
 
 ### 3.1 POST /api/scrape → 上游 POST {base_url}/scrape
 **Auth**：Client

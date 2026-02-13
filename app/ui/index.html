@@ -193,14 +193,21 @@
                     </div>
                     <button class="btn" type="button" id="keysRefresh">刷新</button>
                     <button class="btn" type="button" id="keysResetQuota">重置配额</button>
+                    <button class="btn primary" type="button" id="keysOpenCreate">创建 Key</button>
+                    <button class="btn" type="button" id="keysOpenImport">批量导入</button>
+                    <button class="btn danger" type="button" id="keysPurgeSelected" disabled>删除所选</button>
                   </div>
                 </div>
                 <div class="table-wrap">
                   <table>
                     <thead>
                       <tr>
+                        <th style="width: 36px">
+                          <input id="keysSelectAll" type="checkbox" aria-label="全选" />
+                        </th>
                         <th>id</th>
                         <th>name</th>
+                        <th>account</th>
                         <th>masked</th>
                         <th>status</th>
                         <th>active</th>
@@ -208,6 +215,7 @@
                         <th>conc</th>
                         <th>rpm</th>
                         <th>cooldown</th>
+                        <th>verified</th>
                         <th>last_used</th>
                       </tr>
                     </thead>
@@ -236,6 +244,14 @@
                         <div class="field">
                           <label for="keyEditMasked">masked</label>
                           <input id="keyEditMasked" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditAccount">account</label>
+                          <input id="keyEditAccount" disabled />
+                        </div>
+                        <div class="field">
+                          <label for="keyEditVerified">verified_at</label>
+                          <input id="keyEditVerified" disabled />
                         </div>
                         <div class="field">
                           <label for="keyEditName">name</label>
@@ -269,67 +285,23 @@
                           <input id="keyTestUrl" placeholder="https://www.google.com" />
                           <div class="muted">点击「测试」时使用（调用 <span class="mono">POST /admin/keys/{id}/test</span>）。</div>
                         </div>
+                        <div class="field" style="grid-column: 1 / -1">
+                          <label for="keyEditRotateApiKey">rotate_api_key（可选）</label>
+                          <input id="keyEditRotateApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" type="password" autocomplete="off" />
+                          <div class="muted">用于替换该 Key 的上游 api_key（只写入，不回显）。留空表示不修改。</div>
+                        </div>
                       </div>
 
                       <div class="form-actions">
                         <button class="btn primary" type="button" id="keySave">保存</button>
+                        <button class="btn" type="button" id="keyToggleActive">启用/禁用</button>
                         <button class="btn" type="button" id="keyTest">测试</button>
-                        <button class="btn danger" type="button" id="keySoftDelete">软禁用</button>
+                        <button class="btn" type="button" id="keySoftDelete">禁用</button>
+                        <button class="btn danger" type="button" id="keyPurge">删除</button>
                       </div>
                     </form>
 
                     <pre class="code" id="keyOpOutput" hidden></pre>
-                  </div>
-                </div>
-
-                <div class="card">
-                  <div class="card-header">
-                    <div>
-                      <h2>创建 Key</h2>
-                      <div class="subtext">明文 api_key 仅用于加密落库；创建后不会再次展示明文。</div>
-                    </div>
-                  </div>
-                  <div class="card-body">
-                    <form id="keyCreateForm">
-                      <div class="form-grid">
-                        <div class="field" style="grid-column: 1 / -1">
-                          <label for="keyCreateApiKey">api_key</label>
-                          <input id="keyCreateApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreateName">name</label>
-                          <input id="keyCreateName" placeholder="free-01" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreatePlan">plan_type</label>
-                          <input id="keyCreatePlan" value="free" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreateQuota">daily_quota</label>
-                          <input id="keyCreateQuota" type="number" min="0" value="5" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreateConc">max_concurrent</label>
-                          <input id="keyCreateConc" type="number" min="0" value="2" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreateRpm">rate_limit_per_min</label>
-                          <input id="keyCreateRpm" type="number" min="0" value="10" />
-                        </div>
-                        <div class="field">
-                          <label for="keyCreateActive">is_active</label>
-                          <select id="keyCreateActive">
-                            <option value="true" selected>True</option>
-                            <option value="false">False</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div class="form-actions">
-                        <button class="btn primary" type="button" id="keyCreate">创建</button>
-                      </div>
-                    </form>
-
-                    <pre class="code" id="keyCreateOutput" hidden></pre>
                   </div>
                 </div>
               </div>
@@ -350,6 +322,7 @@
                       <input id="clientsSearch" type="search" placeholder="id / name" />
                     </div>
                     <button class="btn" type="button" id="clientsRefresh">刷新</button>
+                    <button class="btn primary" type="button" id="clientsOpenCreate">创建 Client</button>
                   </div>
                 </div>
                 <div class="table-wrap">
@@ -422,7 +395,8 @@
                       <div class="form-actions">
                         <button class="btn primary" type="button" id="clientSave">保存</button>
                         <button class="btn" type="button" id="clientRotate">Rotate Token</button>
-                        <button class="btn danger" type="button" id="clientSoftDelete">软禁用</button>
+                        <button class="btn" type="button" id="clientSoftDelete">禁用</button>
+                        <button class="btn danger" type="button" id="clientPurge">删除</button>
                       </div>
                     </form>
 
@@ -430,48 +404,6 @@
                   </div>
                 </div>
 
-                <div class="card">
-                  <div class="card-header">
-                    <div>
-                      <h2>创建 Client</h2>
-                      <div class="subtext">将返回一次性 token（请立即复制保存），用于业务方调用 /api/*。</div>
-                    </div>
-                  </div>
-                  <div class="card-body">
-                    <form id="clientCreateForm">
-                      <div class="form-grid">
-                        <div class="field" style="grid-column: 1 / -1">
-                          <label for="clientCreateName">name</label>
-                          <input id="clientCreateName" placeholder="service-a" />
-                        </div>
-                        <div class="field">
-                          <label for="clientCreateQuota">daily_quota（可空）</label>
-                          <input id="clientCreateQuota" type="number" min="0" placeholder="" />
-                        </div>
-                        <div class="field">
-                          <label for="clientCreateRpm">rate_limit_per_min</label>
-                          <input id="clientCreateRpm" type="number" min="0" value="60" />
-                        </div>
-                        <div class="field">
-                          <label for="clientCreateConc">max_concurrent</label>
-                          <input id="clientCreateConc" type="number" min="0" value="10" />
-                        </div>
-                        <div class="field">
-                          <label for="clientCreateActive">is_active</label>
-                          <select id="clientCreateActive">
-                            <option value="true" selected>True</option>
-                            <option value="false">False</option>
-                          </select>
-                        </div>
-                      </div>
-                      <div class="form-actions">
-                        <button class="btn primary" type="button" id="clientCreate">创建</button>
-                      </div>
-                    </form>
-
-                    <pre class="code" id="clientCreateOutput" hidden></pre>
-                  </div>
-                </div>
               </div>
             </div>
           </section>
@@ -485,6 +417,10 @@
                     <div class="subtext">仅记录 /api/* 入站请求；支持过滤与 cursor 分页。</div>
                   </div>
                   <div class="toolbar">
+                    <div class="field">
+                      <label for="logsSearch">搜索</label>
+                      <input id="logsSearch" type="search" placeholder="request_id / endpoint / status / error..." />
+                    </div>
                     <button class="btn primary" type="button" id="logsLoad">加载</button>
                     <button class="btn" type="button" id="logsMore" disabled>更多</button>
                   </div>
@@ -583,6 +519,10 @@
                     <div class="subtext">记录所有管理操作（create/update/delete/rotate/test 等）。</div>
                   </div>
                   <div class="toolbar">
+                    <div class="field">
+                      <label for="auditSearch">搜索</label>
+                      <input id="auditSearch" type="search" placeholder="action / resource / actor / ip..." />
+                    </div>
                     <button class="btn primary" type="button" id="auditLoad">加载</button>
                     <button class="btn" type="button" id="auditMore" disabled>更多</button>
                   </div>
@@ -758,6 +698,123 @@ Invoke-RestMethod -Method GET -Uri "&lt;ORIGIN&gt;/admin/stats" -Headers $h</pre
           当前 origin：<span class="mono" id="connOrigin">-</span>
         </div>
         <pre class="code" id="connTestOutput" hidden></pre>
+      </div>
+    </dialog>
+
+    <dialog id="dlgKeyCreate">
+      <div class="dialog-header">
+        <h2>创建 Key</h2>
+        <button class="btn icon-btn" type="button" id="dlgKeyCreateClose" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="muted" style="margin-bottom: 8px">明文 api_key 仅用于加密落库；创建后不会再次展示明文。</div>
+        <form id="keyCreateForm">
+          <div class="form-grid">
+            <div class="field" style="grid-column: 1 / -1">
+              <label for="keyCreateApiKey">api_key</label>
+              <input id="keyCreateApiKey" placeholder="fc-xxxxxxxxxxxxxxxx0001" />
+            </div>
+            <div class="field">
+              <label for="keyCreateName">name</label>
+              <input id="keyCreateName" placeholder="free-01" />
+            </div>
+            <div class="field">
+              <label for="keyCreatePlan">plan_type</label>
+              <input id="keyCreatePlan" value="free" />
+            </div>
+            <div class="field">
+              <label for="keyCreateQuota">daily_quota</label>
+              <input id="keyCreateQuota" type="number" min="0" value="5" />
+            </div>
+            <div class="field">
+              <label for="keyCreateConc">max_concurrent</label>
+              <input id="keyCreateConc" type="number" min="0" value="2" />
+            </div>
+            <div class="field">
+              <label for="keyCreateRpm">rate_limit_per_min</label>
+              <input id="keyCreateRpm" type="number" min="0" value="10" />
+            </div>
+            <div class="field">
+              <label for="keyCreateActive">is_active</label>
+              <select id="keyCreateActive">
+                <option value="true" selected>True</option>
+                <option value="false">False</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" type="button" id="keyCreate">创建</button>
+          </div>
+        </form>
+        <pre class="code" id="keyCreateOutput" hidden></pre>
+      </div>
+    </dialog>
+
+    <dialog id="dlgKeyImport">
+      <div class="dialog-header">
+        <h2>批量导入（文本）</h2>
+        <button class="btn icon-btn" type="button" id="dlgKeyImportClose" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="muted" style="margin-bottom: 8px">
+          每行一条；支持 <span class="mono">user|pass|api_key|verified_at</span> / 逗号 / Tab / 空格分隔；
+          支持 <span class="mono">api_key</span> 单列；时间支持 <span class="mono">YYYY-MM-DD HH:MM:SS</span> / ISO8601。
+        </div>
+        <div class="field" style="margin-bottom: 8px">
+          <label for="keyImportText">导入内容</label>
+          <textarea
+            id="keyImportText"
+            rows="10"
+            placeholder="user@example.com,ABCde123456-,fc-xxxxxxxxxxxxxxxx0001,2026-02-10 12:36:35&#10;fc-yyyyyyyyyyyyyyyy0002"
+          ></textarea>
+          <div class="muted">账号密码会加密存储；不会在 UI/接口返回明文。</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="button" id="keyImportRun">开始导入</button>
+        </div>
+        <pre class="code" id="keyImportOutput" hidden></pre>
+      </div>
+    </dialog>
+
+    <dialog id="dlgClientCreate">
+      <div class="dialog-header">
+        <h2>创建 Client</h2>
+        <button class="btn icon-btn" type="button" id="dlgClientCreateClose" aria-label="关闭">×</button>
+      </div>
+      <div class="dialog-body">
+        <div class="muted" style="margin-bottom: 8px">将返回一次性 token（请立即复制保存），用于业务方调用 /api/*。</div>
+        <form id="clientCreateForm">
+          <div class="form-grid">
+            <div class="field" style="grid-column: 1 / -1">
+              <label for="clientCreateName">name</label>
+              <input id="clientCreateName" placeholder="service-a" />
+            </div>
+            <div class="field">
+              <label for="clientCreateQuota">daily_quota（可空）</label>
+              <input id="clientCreateQuota" type="number" min="0" placeholder="" />
+            </div>
+            <div class="field">
+              <label for="clientCreateRpm">rate_limit_per_min</label>
+              <input id="clientCreateRpm" type="number" min="0" value="60" />
+            </div>
+            <div class="field">
+              <label for="clientCreateConc">max_concurrent</label>
+              <input id="clientCreateConc" type="number" min="0" value="10" />
+            </div>
+            <div class="field">
+              <label for="clientCreateActive">is_active</label>
+              <select id="clientCreateActive">
+                <option value="true" selected>True</option>
+                <option value="false">False</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" type="button" id="clientCreate">创建</button>
+          </div>
+        </form>
+
+        <pre class="code" id="clientCreateOutput" hidden></pre>
       </div>
     </dialog>
 

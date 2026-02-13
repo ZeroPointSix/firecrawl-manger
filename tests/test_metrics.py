@@ -67,9 +67,11 @@ def test_metrics_endpoint_exposes_prometheus_metrics(tmp_path):
             max_concurrent=10,
         )
         db.add(c)
+        db.flush()
 
         key_bytes = derive_master_key_bytes(secrets.master_key)
         k = ApiKey(
+            client_id=c.id,
             api_key_ciphertext=encrypt_api_key(key_bytes, "fc-key-1"),
             api_key_hash="h1",
             api_key_last4="0001",

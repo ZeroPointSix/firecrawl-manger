@@ -14,6 +14,7 @@
     keys: [],
     keysFiltered: [],
     selectedKeyId: null,
+    selectedKeyIds: new Set(),
     clients: [],
     clientsFiltered: [],
     selectedClientId: null,
@@ -440,6 +441,37 @@
     while (el.firstChild) el.removeChild(el.firstChild);
   }
 
+  function updateKeysBulkUi() {
+    const btn = qs("#keysPurgeSelected");
+    if (btn) btn.disabled = state.selectedKeyIds.size === 0;
+
+    const master = qs("#keysSelectAll");
+    if (!master) return;
+    const visibleIds = state.keysFiltered.map((k) => String(k.id));
+    if (!visibleIds.length) {
+      master.checked = false;
+      master.indeterminate = false;
+      return;
+    }
+
+    let selectedVisible = 0;
+    for (const id of visibleIds) if (state.selectedKeyIds.has(id)) selectedVisible += 1;
+
+    if (selectedVisible === 0) {
+      master.checked = false;
+      master.indeterminate = false;
+      return;
+    }
+    if (selectedVisible === visibleIds.length) {
+      master.checked = true;
+      master.indeterminate = false;
+      return;
+    }
+
+    master.checked = false;
+    master.indeterminate = true;
+  }
+
   function renderKeysTable() {
     const tbody = qs("#keysTbody");
     if (!tbody) return;
@@ -451,9 +483,24 @@
       tr.dataset.selected = String(item.id) === String(state.selectedKeyId);
       tr.setAttribute("data-selected", tr.dataset.selected);
 
+      const tdCheck = document.createElement("td");
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = state.selectedKeyIds.has(String(item.id));
+      cb.addEventListener("click", (ev) => ev.stopPropagation());
+      cb.addEventListener("change", () => {
+        const id = String(item.id);
+        if (cb.checked) state.selectedKeyIds.add(id);
+        else state.selectedKeyIds.delete(id);
+        updateKeysBulkUi();
+      });
+      tdCheck.appendChild(cb);
+      tr.appendChild(tdCheck);
+
       const cols = [
         item.id,
         item.name || "",
+        item.account_username || "",
         item.api_key_masked || "",
         item.status || "",
         item.is_active,
@@ -461,6 +508,7 @@
         `${item.current_concurrent ?? 0}/${item.max_concurrent ?? 0}`,
         item.rate_limit_per_min ?? "",
         item.cooldown_until || "",
+        item.account_verified_at || "",
         item.last_used_at || "",
       ];
       for (const c of cols) {
@@ -474,6 +522,7 @@
     }
 
     setText("keysCount", String(state.keysFiltered.length));
+    updateKeysBulkUi();
   }
 
   function applyKeysFilter() {
@@ -487,6 +536,7 @@
       const hay = [
         String(k.id),
         k.name || "",
+        k.account_username || "",
         k.api_key_masked || "",
         k.status || "",
         String(k.is_active),
@@ -498,12 +548,13 @@
     renderKeysTable();
   }
 
-  async function loadKeys() {
+  async function loadKeys({ silent = false } = {}) {
     try {
       const body = await api("GET", "/admin/keys");
       state.keys = Array.isArray(body.items) ? body.items : [];
+      state.selectedKeyIds = new Set();
       applyKeysFilter();
-      toast("success", "Keys 已刷新", `共 ${state.keys.length} 条`);
+      if (!silent) toast("success", "Keys 已刷新", `共 ${state.keys.length} 条`);
     } catch (e) {
       toast("error", "刷新 Keys 失败", e.message || String(e));
     }
@@ -522,6 +573,10 @@
 
     qs("#keyEditId").value = String(item.id);
     qs("#keyEditMasked").value = item.api_key_masked || "";
+    const accountEl = qs("#keyEditAccount");
+    if (accountEl) accountEl.value = item.account_username || "";
+    const verifiedEl = qs("#keyEditVerified");
+    if (verifiedEl) verifiedEl.value = item.account_verified_at || "";
     qs("#keyEditName").value = item.name || "";
     qs("#keyEditPlan").value = item.plan_type || "";
     qs("#keyEditQuota").value = item.daily_quota ?? 0;
@@ -555,14 +610,37 @@
         is_active: qs("#keyEditActive").value === "true",
       };
 
+      const rotateApiKeyEl = qs("#keyEditRotateApiKey");
+      const rotateApiKey = String(rotateApiKeyEl?.value || "").trim();
+      if (rotateApiKey) payload.api_key = rotateApiKey;
+
       const body = await api("PUT", `/admin/keys/${id}`, payload);
       setHidden("keyOpOutput", false);
       qs("#keyOpOutput").textContent = formatJson(body);
       toast("success", "Key 已更新", `key_id=${id}`);
-      await loadKeys();
+      if (rotateApiKeyEl) rotateApiKeyEl.value = "";
+      await loadKeys({ silent: true });
       selectKey(id);
     } catch (e) {
       toast("error", "更新 Key 失败", e.message || String(e));
+    }
+  }
+
+  async function toggleKeyActive() {
+    try {
+      const id = parseNum(qs("#keyEditId").value);
+      const item = state.keys.find((k) => String(k.id) === String(id));
+      if (!item) throw new Error("未找到 Key");
+
+      const nextActive = !Boolean(item.is_active);
+      const body = await api("PUT", `/admin/keys/${id}`, { is_active: nextActive });
+      setHidden("keyOpOutput", false);
+      qs("#keyOpOutput").textContent = formatJson(body);
+      toast("success", nextActive ? "Key 已启用" : "Key 已禁用", `key_id=${id}`);
+      await loadKeys({ silent: true });
+      selectKey(id);
+    } catch (e) {
+      toast("error", "切换启用状态失败", e.message || String(e));
     }
   }
 
@@ -583,10 +661,31 @@
       qs("#keyCreateOutput").textContent = formatJson(body);
       toast("success", "Key 创建成功", `key_id=${body.id}`);
       qs("#keyCreateApiKey").value = "";
-      await loadKeys();
+      await loadKeys({ silent: true });
       selectKey(body.id);
+      closeDialog("dlgKeyCreate");
     } catch (e) {
       toast("error", "创建 Key 失败", e.message || String(e));
+    }
+  }
+
+  async function importKeysText() {
+    try {
+      const text = String(qs("#keyImportText")?.value || "").trim();
+      if (!text) throw new Error("导入内容不能为空");
+
+      const body = await api("POST", "/admin/keys/import-text", { text });
+      setHidden("keyImportOutput", false);
+      qs("#keyImportOutput").textContent = formatJson(body);
+      toast(
+        "success",
+        "导入完成",
+        `created=${body.created} updated=${body.updated} skipped=${body.skipped} failed=${body.failed}`
+      );
+      await loadKeys({ silent: true });
+      closeDialog("dlgKeyImport");
+    } catch (e) {
+      toast("error", "导入失败", e.message || String(e));
     }
   }
 
@@ -598,7 +697,7 @@
       setHidden("keyOpOutput", false);
       qs("#keyOpOutput").textContent = formatJson(body);
       toast("success", "Key 测试完成", `key_id=${id} ok=${body.ok}`);
-      await loadKeys();
+      await loadKeys({ silent: true });
       selectKey(id);
     } catch (e) {
       toast("error", "测试 Key 失败", e.message || String(e));
@@ -608,16 +707,65 @@
   async function softDeleteKey() {
     try {
       const id = parseNum(qs("#keyEditId").value);
-      if (!window.confirm(`确认软禁用 key_id=${id} ?`)) return;
+      if (!window.confirm(`确认禁用 key_id=${id} ?`)) return;
       await api("DELETE", `/admin/keys/${id}`);
-      toast("success", "Key 已软禁用", `key_id=${id}`);
-      await loadKeys();
+      toast("success", "Key 已禁用", `key_id=${id}`);
+      await loadKeys({ silent: true });
       state.selectedKeyId = null;
       setHidden("keyEmpty", false);
       setHidden("keyEditForm", true);
     } catch (e) {
-      toast("error", "软禁用 Key 失败", e.message || String(e));
+      toast("error", "禁用 Key 失败", e.message || String(e));
     }
+  }
+
+  async function purgeKey() {
+    try {
+      const id = parseNum(qs("#keyEditId").value);
+      if (!window.confirm(`确认从数据库永久删除 key_id=${id} ? 此操作不可恢复。`)) return;
+      await api("DELETE", `/admin/keys/${id}/purge`);
+      toast("success", "Key 已删除", `key_id=${id}`);
+      state.selectedKeyIds.delete(String(id));
+      await loadKeys({ silent: true });
+      state.selectedKeyId = null;
+      setHidden("keyEmpty", false);
+      setHidden("keyEditForm", true);
+    } catch (e) {
+      toast("error", "删除 Key 失败", e.message || String(e));
+    }
+  }
+
+  async function purgeSelectedKeys() {
+    const ids = Array.from(state.selectedKeyIds);
+    if (!ids.length) return;
+
+    if (!window.confirm(`确认从数据库永久删除选中的 ${ids.length} 条 Key ? 此操作不可恢复。`)) return;
+
+    let deleted = 0;
+    const failed = [];
+    for (const sid of ids) {
+      const id = Number(sid);
+      if (!Number.isFinite(id)) continue;
+      try {
+        await api("DELETE", `/admin/keys/${id}/purge`);
+        deleted += 1;
+      } catch (e) {
+        failed.push({ id, code: e.code || "ERROR", message: e.message || String(e) });
+      }
+    }
+
+    if (failed.length) {
+      logClient("error", "批量删除 Key 部分失败", { deleted, failed });
+      toast("warning", "批量删除完成", `deleted=${deleted} failed=${failed.length}`);
+    } else {
+      toast("success", "批量删除完成", `deleted=${deleted}`);
+    }
+
+    state.selectedKeyIds = new Set();
+    await loadKeys({ silent: true });
+    state.selectedKeyId = null;
+    setHidden("keyEmpty", false);
+    setHidden("keyEditForm", true);
   }
 
   async function resetKeysQuota() {
@@ -625,7 +773,7 @@
       if (!window.confirm("确认重置所有 Key 的今日配额计数？")) return;
       const body = await api("POST", "/admin/keys/reset-quota");
       toast("success", "配额已重置", `affected_keys=${body.affected_keys}`);
-      await loadKeys();
+      await loadKeys({ silent: true });
     } catch (e) {
       toast("error", "重置配额失败", e.message || String(e));
     }
@@ -757,6 +905,14 @@
       setHidden("clientCreateOutput", false);
       qs("#clientCreateOutput").textContent = formatJson(body);
       toast("success", "Client 创建成功", "token 仅返回一次，请立即复制保存");
+
+      const token = body?.token;
+      const dpTokenEl = qs("#dpClientToken");
+      if (dpTokenEl && typeof token === "string" && token.trim()) {
+        dpTokenEl.value = token.trim();
+        toast("info", "已填入数据面自检", "Client Token 已自动写入「数据面自检（/api/scrape）」表单");
+      }
+
       qs("#clientCreateName").value = "";
       qs("#clientCreateQuota").value = "";
       await loadClients();
@@ -774,6 +930,13 @@
       setHidden("clientOpOutput", false);
       qs("#clientOpOutput").textContent = formatJson(body);
       toast("success", "Rotate 成功", "新 token 已返回，请立即复制保存");
+
+      const token = body?.token;
+      const dpTokenEl = qs("#dpClientToken");
+      if (dpTokenEl && typeof token === "string" && token.trim()) {
+        dpTokenEl.value = token.trim();
+        toast("info", "已填入数据面自检", "Client Token 已自动写入「数据面自检（/api/scrape）」表单");
+      }
     } catch (e) {
       toast("error", "Rotate 失败", e.message || String(e));
     }
@@ -782,15 +945,30 @@
   async function softDeleteClient() {
     try {
       const id = parseNum(qs("#clientEditId").value);
-      if (!window.confirm(`确认软禁用 client_id=${id} ?`)) return;
+      if (!window.confirm(`确认禁用 client_id=${id} ?`)) return;
       await api("DELETE", `/admin/clients/${id}`);
-      toast("success", "Client 已软禁用", `client_id=${id}`);
+      toast("success", "Client 已禁用", `client_id=${id}`);
       await loadClients();
       state.selectedClientId = null;
       setHidden("clientEmpty", false);
       setHidden("clientEditForm", true);
     } catch (e) {
-      toast("error", "软禁用 Client 失败", e.message || String(e));
+      toast("error", "禁用 Client 失败", e.message || String(e));
+    }
+  }
+
+  async function purgeClient() {
+    try {
+      const id = parseNum(qs("#clientEditId").value);
+      if (!window.confirm(`确认从数据库永久删除 client_id=${id} ? 此操作不可恢复。`)) return;
+      await api("DELETE", `/admin/clients/${id}/purge`);
+      toast("success", "Client 已删除", `client_id=${id}`);
+      await loadClients();
+      state.selectedClientId = null;
+      setHidden("clientEmpty", false);
+      setHidden("clientEditForm", true);
+    } catch (e) {
+      toast("error", "删除 Client 失败", e.message || String(e));
     }
   }
 
@@ -824,7 +1002,15 @@
     } catch (e) {
       setHidden("dpTestOutput", false);
       qs("#dpTestOutput").textContent = `${e.message || e}`;
-      toast("error", "数据面自检失败", e.message || String(e));
+      if (e && e.code === "CLIENT_UNAUTHORIZED") {
+        toast(
+          "error",
+          "数据面自检失败",
+          "CLIENT_UNAUTHORIZED：请粘贴 /admin/clients 创建/rotate 时返回的 token（通常以 fcam_client_ 开头），不要填 Admin Token/Firecrawl Key"
+        );
+      } else {
+        toast("error", "数据面自检失败", e.message || String(e));
+      }
     }
   }
 
@@ -833,7 +1019,27 @@
     if (!tbody) return;
     clearElementChildren(tbody);
 
-    for (const item of state.logs) {
+    const q = String(qs("#logsSearch")?.value || "").trim().toLowerCase();
+    const items = !q
+      ? state.logs
+      : state.logs.filter((x) => {
+          const hay = [
+            String(x.id),
+            x.created_at || "",
+            x.request_id || "",
+            x.endpoint || "",
+            String(x.status_code ?? ""),
+            String(x.client_id ?? ""),
+            String(x.api_key_id ?? ""),
+            String(x.idempotency_key ?? ""),
+            String(x.error_message || ""),
+          ]
+            .join(" ")
+            .toLowerCase();
+          return hay.includes(q);
+        });
+
+    for (const item of items) {
       const tr = document.createElement("tr");
       tr.dataset.id = String(item.id);
       tr.dataset.selected = String(item.id) === String(state.selectedLogId);
@@ -918,7 +1124,27 @@
     if (!tbody) return;
     clearElementChildren(tbody);
 
-    for (const item of state.auditLogs) {
+    const q = String(qs("#auditSearch")?.value || "").trim().toLowerCase();
+    const items = !q
+      ? state.auditLogs
+      : state.auditLogs.filter((x) => {
+          const hay = [
+            String(x.id),
+            x.created_at || "",
+            x.action || "",
+            x.resource_type || "",
+            String(x.resource_id ?? ""),
+            x.actor_type || "",
+            String(x.actor_id ?? ""),
+            x.ip || "",
+            String(x.user_agent || ""),
+          ]
+            .join(" ")
+            .toLowerCase();
+          return hay.includes(q);
+        });
+
+    for (const item of items) {
       const tr = document.createElement("tr");
       tr.dataset.id = String(item.id);
       tr.dataset.selected = String(item.id) === String(state.selectedAuditId);
@@ -1138,23 +1364,56 @@
     qs("#keysRefresh").addEventListener("click", () => loadKeys());
     qs("#keysResetQuota").addEventListener("click", () => resetKeysQuota());
     qs("#keysSearch").addEventListener("input", () => applyKeysFilter());
+    qs("#keysSelectAll")?.addEventListener("change", () => {
+      const master = qs("#keysSelectAll");
+      const checked = Boolean(master?.checked);
+      for (const k of state.keysFiltered) {
+        const id = String(k.id);
+        if (checked) state.selectedKeyIds.add(id);
+        else state.selectedKeyIds.delete(id);
+      }
+      renderKeysTable();
+    });
+    qs("#keysOpenCreate")?.addEventListener("click", () => {
+      setHidden("keyCreateOutput", true);
+      openDialog("dlgKeyCreate");
+    });
+    qs("#keysOpenImport")?.addEventListener("click", () => {
+      setHidden("keyImportOutput", true);
+      openDialog("dlgKeyImport");
+    });
+    qs("#keysPurgeSelected")?.addEventListener("click", () => purgeSelectedKeys());
+    qs("#dlgKeyCreateClose")?.addEventListener("click", () => closeDialog("dlgKeyCreate"));
+    qs("#dlgKeyImportClose")?.addEventListener("click", () => closeDialog("dlgKeyImport"));
     qs("#keySave").addEventListener("click", () => saveKey());
+    qs("#keyToggleActive")?.addEventListener("click", () => toggleKeyActive());
     qs("#keyTest").addEventListener("click", () => testKey());
     qs("#keySoftDelete").addEventListener("click", () => softDeleteKey());
+    qs("#keyPurge")?.addEventListener("click", () => purgeKey());
     qs("#keyCreate").addEventListener("click", () => createKey());
+    const importBtn = qs("#keyImportRun");
+    if (importBtn) importBtn.addEventListener("click", () => importKeysText());
 
     qs("#clientsRefresh").addEventListener("click", () => loadClients());
     qs("#clientsSearch").addEventListener("input", () => applyClientsFilter());
+    qs("#clientsOpenCreate")?.addEventListener("click", () => {
+      setHidden("clientCreateOutput", true);
+      openDialog("dlgClientCreate");
+    });
+    qs("#dlgClientCreateClose")?.addEventListener("click", () => closeDialog("dlgClientCreate"));
     qs("#clientSave").addEventListener("click", () => saveClient());
     qs("#clientRotate").addEventListener("click", () => rotateClientToken());
     qs("#clientSoftDelete").addEventListener("click", () => softDeleteClient());
+    qs("#clientPurge")?.addEventListener("click", () => purgeClient());
     qs("#clientCreate").addEventListener("click", () => createClient());
 
     qs("#logsLoad").addEventListener("click", () => loadLogs({ append: false }));
     qs("#logsMore").addEventListener("click", () => loadLogs({ append: true }));
+    qs("#logsSearch")?.addEventListener("input", () => renderLogsTable());
 
     qs("#auditLoad").addEventListener("click", () => loadAudit({ append: false }));
     qs("#auditMore").addEventListener("click", () => loadAudit({ append: true }));
+    qs("#auditSearch")?.addEventListener("input", () => renderAuditTable());
 
     qs("#dpTestRun")?.addEventListener("click", () => runDataPlaneScrapeTest());
 

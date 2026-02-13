@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.health import router as health_router
 from app.api.control_plane import router as control_plane_router
 from app.api.data_plane import router as data_plane_router
+from app.api.firecrawl_compat import router as firecrawl_compat_router
 from app.config import AppConfig, Secrets, load_config
 from app.core.concurrency import ConcurrencyManager, RedisConcurrencyManager
 from app.core.cooldown import NoopCooldownStore, RedisCooldownStore
@@ -68,6 +69,11 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
             scope="key",
             lease_ttl_ms=lease_ttl_ms,
         )
+        app.state.key_rate_limiter = RedisTokenBucketRateLimiter(
+            client=app.state.redis,
+            key_prefix=config.state.redis.key_prefix,
+            scope="key",
+        )
         app.state.cooldown_store = RedisCooldownStore(
             client=app.state.redis,
             key_prefix=config.state.redis.key_prefix,
@@ -78,6 +84,7 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
         app.state.client_concurrency = ConcurrencyManager()
         app.state.client_rate_limiter = TokenBucketRateLimiter()
         app.state.key_concurrency = ConcurrencyManager()
+        app.state.key_rate_limiter = TokenBucketRateLimiter()
         app.state.cooldown_store = NoopCooldownStore()
 
     app.state.key_pool = KeyPool(cooldown_store=app.state.cooldown_store)
@@ -97,6 +104,7 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
         secrets=secrets,
         key_pool=app.state.key_pool,
         key_concurrency=app.state.key_concurrency,
+        key_rate_limiter=app.state.key_rate_limiter,
         metrics=app.state.metrics,
         cooldown_store=app.state.cooldown_store,
         transport=None,
@@ -114,10 +122,15 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
     app.include_router(health_router)
     if config.server.enable_data_plane:
         app.include_router(data_plane_router)
+        app.include_router(firecrawl_compat_router)
     if config.server.enable_control_plane:
         app.include_router(control_plane_router)
         ui_dir = Path(__file__).resolve().parent / "ui"
         app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
+
+        ui2_dir = Path(__file__).resolve().parent / "ui2"
+        if ui2_dir.exists():
+            app.mount("/ui2", StaticFiles(directory=str(ui2_dir), html=True), name="ui2")
 
     logger.info("app.started", extra={"fields": {"port": config.server.port}})
     return app

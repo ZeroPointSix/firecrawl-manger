@@ -11,7 +11,7 @@ from app.core.forwarder import Forwarder
 from app.core.key_pool import KeyPool
 from app.core.security import derive_master_key_bytes, encrypt_api_key, hmac_sha256_hex
 from app.core.time import today_in_timezone
-from app.db.models import ApiKey, Base, Client, RequestLog
+from app.db.models import ApiKey, Base, Client, IdempotencyRecord, RequestLog
 from app.main import create_app
 
 
@@ -111,6 +111,91 @@ def test_admin_keys_crud_and_audit(tmp_path):
         assert "key.create" in actions
         assert "key.update" in actions
         assert "key.delete" in actions
+
+
+def test_admin_keys_import_text_creates_and_updates(tmp_path):
+    app, _ = _make_app(tmp_path)
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/admin/keys/import-text",
+            headers=_admin_headers(),
+            json={
+                "text": "\n".join(
+                    [
+                        "fc-xxxxxxxxxxxxxxxx0001",
+                        "user@example.com|p@ssw0rd|fc-xxxxxxxxxxxxxxxx0001|2026-02-12T10:00:00Z",
+                        "u2,p2,fc-yyyyyyyyyyyyyyyy0002,2026-02-12",
+                        "u3,p3,fc-zzzzzzzzzzzzzzzz0003,2026-02-10 12:36:35",
+                        "# comment",
+                        "",
+                    ]
+                )
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["created"] == 3
+        assert body["updated"] == 1
+        assert body["failed"] == 0
+
+        rlist = client.get("/admin/keys", headers=_admin_headers())
+        assert rlist.status_code == 200
+        items = rlist.json()["items"]
+        k1 = next(i for i in items if i["api_key_masked"] == "fc-****0001")
+        assert k1["account_username"] == "user@example.com"
+        assert k1["account_verified_at"] == "2026-02-12T10:00:00Z"
+
+        k2 = next(i for i in items if i["api_key_masked"] == "fc-****0002")
+        assert k2["account_username"] == "u2"
+        assert k2["account_verified_at"] == "2026-02-12T00:00:00Z"
+
+        k3 = next(i for i in items if i["api_key_masked"] == "fc-****0003")
+        assert k3["account_username"] == "u3"
+        assert k3["account_verified_at"] == "2026-02-10T12:36:35Z"
+
+
+def test_admin_keys_list_supports_pagination_and_name_search(tmp_path):
+    app, _ = _make_app(tmp_path)
+
+    with TestClient(app) as client:
+        for i, name in enumerate(["alpha", "beta", "alpha-2", None], start=1):
+            r = client.post(
+                "/admin/keys",
+                headers=_admin_headers(),
+                json={
+                    "api_key": f"fc-xxxxxxxxxxxxxxxx00{i:02d}",
+                    "name": name,
+                    "plan_type": "free",
+                    "daily_quota": 5,
+                    "max_concurrent": 2,
+                    "rate_limit_per_min": 10,
+                    "is_active": True,
+                },
+            )
+            assert r.status_code == 201
+
+        rpage1 = client.get("/admin/keys?page=1&page_size=2", headers=_admin_headers())
+        assert rpage1.status_code == 200
+        body1 = rpage1.json()
+        assert "pagination" in body1
+        assert body1["pagination"]["page"] == 1
+        assert body1["pagination"]["page_size"] == 2
+        assert body1["pagination"]["total_items"] == 4
+        assert body1["pagination"]["total_pages"] == 2
+        assert len(body1["items"]) == 2
+
+        rpage2 = client.get("/admin/keys?page=2&page_size=2", headers=_admin_headers())
+        assert rpage2.status_code == 200
+        body2 = rpage2.json()
+        assert body2["pagination"]["page"] == 2
+        assert len(body2["items"]) == 2
+
+        rsearch = client.get("/admin/keys?page=1&page_size=50&q=ALPHA", headers=_admin_headers())
+        assert rsearch.status_code == 200
+        items = rsearch.json()["items"]
+        assert len(items) == 2
+        assert all("alpha" in (i["name"] or "").lower() for i in items)
 
 
 def test_admin_clients_create_rotate_disable(tmp_path):
@@ -302,17 +387,35 @@ def test_admin_logs_query_pagination_and_filters(tmp_path):
         assert r1.json()["has_more"] is True
         assert len(r1.json()["items"]) == 1
         assert r1.json()["items"][0]["request_id"] == "req_b"
+        assert r1.json()["items"][0]["level"] == "warn"
         assert r1.json()["items"][0]["api_key_masked"] == "fc-****0001"
 
         cursor = r1.json()["next_cursor"]
         r2 = client.get(f"/admin/logs?limit=10&cursor={cursor}", headers=_admin_headers())
         assert r2.status_code == 200
         assert [i["request_id"] for i in r2.json()["items"]] == ["req_a"]
+        assert r2.json()["items"][0]["level"] == "info"
 
         r3 = client.get("/admin/logs?request_id=req_a", headers=_admin_headers())
         assert r3.status_code == 200
         assert len(r3.json()["items"]) == 1
         assert r3.json()["items"][0]["request_id"] == "req_a"
+
+        r4 = client.get("/admin/logs?level=warn", headers=_admin_headers())
+        assert r4.status_code == 200
+        assert [i["request_id"] for i in r4.json()["items"]] == ["req_b"]
+
+        r5 = client.get("/admin/logs?level=info", headers=_admin_headers())
+        assert r5.status_code == 200
+        assert [i["request_id"] for i in r5.json()["items"]] == ["req_a"]
+
+        r6 = client.get("/admin/logs?q=rate", headers=_admin_headers())
+        assert r6.status_code == 200
+        assert [i["request_id"] for i in r6.json()["items"]] == ["req_b"]
+
+        r7 = client.get("/admin/logs?level=wat", headers=_admin_headers())
+        assert r7.status_code == 400
+        assert r7.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_admin_key_test_marks_cooling_on_429(tmp_path):
@@ -483,3 +586,198 @@ def test_admin_audit_logs_pagination_and_filters(tmp_path):
         assert filtered.status_code == 200
         assert len(filtered.json()["items"]) == 1
         assert filtered.json()["items"][0]["action"] == "client.rotate"
+
+
+def test_admin_keys_purge_deletes_key_and_nulls_request_logs(tmp_path):
+    app, _ = _make_app(tmp_path)
+
+    with TestClient(app) as client:
+        r1 = client.post(
+            "/admin/keys",
+            headers=_admin_headers(),
+            json={
+                "api_key": "fc-xxxxxxxxxxxxxxxx0001",
+                "name": "k1",
+                "plan_type": "free",
+                "daily_quota": 5,
+                "max_concurrent": 2,
+                "rate_limit_per_min": 10,
+                "is_active": True,
+            },
+        )
+        assert r1.status_code == 201
+        key_id = r1.json()["id"]
+
+        SessionLocal = app.state.db_session_factory
+        with SessionLocal() as db:
+            db.add(
+                RequestLog(
+                    request_id="req_purge_key",
+                    api_key_id=key_id,
+                    endpoint="scrape",
+                    method="POST",
+                    status_code=200,
+                    response_time_ms=1,
+                    success=True,
+                    retry_count=0,
+                )
+            )
+            db.commit()
+
+        rpurge = client.delete(f"/admin/keys/{key_id}/purge", headers=_admin_headers())
+        assert rpurge.status_code == 204
+
+        with SessionLocal() as db:
+            assert db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none() is None
+            log = db.query(RequestLog).filter(RequestLog.request_id == "req_purge_key").one()
+            assert log.api_key_id is None
+
+        raudit = client.get("/admin/audit-logs?action=key.purge", headers=_admin_headers())
+        assert raudit.status_code == 200
+        assert len(raudit.json()["items"]) == 1
+
+
+def test_admin_clients_purge_deletes_client_and_clears_related_rows(tmp_path):
+    app, _ = _make_app(tmp_path)
+
+    with TestClient(app) as client:
+        r1 = client.post(
+            "/admin/clients",
+            headers=_admin_headers(),
+            json={
+                "name": "service-a",
+                "daily_quota": 1000,
+                "rate_limit_per_min": 60,
+                "max_concurrent": 10,
+                "is_active": True,
+            },
+        )
+        assert r1.status_code == 201
+        client_id = r1.json()["client"]["id"]
+
+        SessionLocal = app.state.db_session_factory
+        with SessionLocal() as db:
+            db.add(
+                RequestLog(
+                    request_id="req_purge_client",
+                    client_id=client_id,
+                    endpoint="scrape",
+                    method="POST",
+                    status_code=200,
+                    response_time_ms=1,
+                    success=True,
+                    retry_count=0,
+                )
+            )
+            db.add(
+                IdempotencyRecord(
+                    client_id=client_id,
+                    idempotency_key="idem_1",
+                    request_hash="h" * 64,
+                    status="completed",
+                )
+            )
+            db.commit()
+
+        rpurge = client.delete(f"/admin/clients/{client_id}/purge", headers=_admin_headers())
+        assert rpurge.status_code == 204
+
+        with SessionLocal() as db:
+            assert db.query(Client).filter(Client.id == client_id).one_or_none() is None
+            log = db.query(RequestLog).filter(RequestLog.request_id == "req_purge_client").one()
+            assert log.client_id is None
+            assert db.query(IdempotencyRecord).filter(IdempotencyRecord.client_id == client_id).count() == 0
+
+        raudit = client.get("/admin/audit-logs?action=client.purge", headers=_admin_headers())
+        assert raudit.status_code == 200
+        assert len(raudit.json()["items"]) == 1
+
+
+def test_admin_dashboard_chart_returns_200(tmp_path):
+    app, _ = _make_app(tmp_path)
+    with TestClient(app) as client:
+        r = client.get(
+            "/admin/dashboard/chart",
+            headers=_admin_headers(),
+            params={"tz": "UTC", "range": "24h", "bucket": "hour"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["range"] == "24h"
+    assert body["bucket"] == "hour"
+    assert body["tz"] == "UTC"
+    assert len(body["labels"]) == 24
+    assert len(body["datasets"]) == 2
+    assert all(len(ds["data"]) == 24 for ds in body["datasets"])
+
+
+def test_admin_dashboard_stats_ignores_logs_without_client_id_by_default(tmp_path):
+    app, secrets = _make_app(tmp_path)
+    SessionLocal = app.state.db_session_factory
+
+    with SessionLocal() as db:
+        key_bytes = derive_master_key_bytes(secrets.master_key)
+        today = today_in_timezone("UTC")
+        c = Client(
+            name="svc",
+            token_hash=hmac_sha256_hex(key_bytes, "tok"),
+            is_active=True,
+            daily_quota=10,
+            daily_usage=0,
+            quota_reset_at=today,
+            rate_limit_per_min=60,
+            max_concurrent=10,
+        )
+        db.add(c)
+        db.commit()
+        db.refresh(c)
+
+        now = datetime.now(timezone.utc)
+        db.add(
+            RequestLog(
+                request_id="req_unauth",
+                client_id=None,
+                api_key_id=None,
+                endpoint="crawl_status",
+                method="GET",
+                status_code=401,
+                response_time_ms=1,
+                success=False,
+                retry_count=0,
+                error_message="CLIENT_UNAUTHORIZED",
+                idempotency_key=None,
+                created_at=now,
+            )
+        )
+        db.add(
+            RequestLog(
+                request_id="req_ok",
+                client_id=c.id,
+                api_key_id=None,
+                endpoint="scrape",
+                method="POST",
+                status_code=200,
+                response_time_ms=2,
+                success=True,
+                retry_count=0,
+                error_message=None,
+                idempotency_key=None,
+                created_at=now,
+            )
+        )
+        db.commit()
+
+    with TestClient(app) as client:
+        rstats = client.get("/admin/dashboard/stats", headers=_admin_headers())
+        assert rstats.status_code == 200
+        assert rstats.json()["requests_24h"]["total"] == 1
+        assert rstats.json()["requests_24h"]["failed"] == 0
+
+        rchart = client.get(
+            "/admin/dashboard/chart",
+            headers=_admin_headers(),
+            params={"tz": "UTC", "range": "24h", "bucket": "hour"},
+        )
+        assert rchart.status_code == 200
+        total_in_chart = sum(sum(ds["data"]) for ds in rchart.json()["datasets"])
+        assert total_in_chart == 1

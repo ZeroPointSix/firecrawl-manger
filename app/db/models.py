@@ -15,9 +15,15 @@ class ApiKey(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
 
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("clients.id"), nullable=True)
+
     api_key_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     api_key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     api_key_last4: Mapped[str] = mapped_column(String(4), nullable=False)
+
+    account_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    account_password_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    account_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     plan_type: Mapped[str] = mapped_column(String(32), nullable=False, default="free")
@@ -44,6 +50,7 @@ class ApiKey(Base):
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
 
+    client: Mapped["Client | None"] = relationship(back_populates="api_keys")
     request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="api_key")
 
 
@@ -66,6 +73,7 @@ class Client(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    api_keys: Mapped[list[ApiKey]] = relationship(back_populates="client")
     request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="client")
     idempotency_records: Mapped[list["IdempotencyRecord"]] = relationship(back_populates="client")
 

@@ -37,10 +37,19 @@ def _add_client(db, master_key: str) -> tuple[Client, str]:
     return c, token
 
 
-def _add_key(db, master_key: str, api_key_plain: str, api_key_hash: str, last4: str) -> ApiKey:
+def _add_key(
+    db,
+    master_key: str,
+    api_key_plain: str,
+    api_key_hash: str,
+    last4: str,
+    *,
+    client_id: int | None = None,
+) -> ApiKey:
     key_bytes = derive_master_key_bytes(master_key)
     cipher = encrypt_api_key(key_bytes, api_key_plain)
     k = ApiKey(
+        client_id=client_id,
         api_key_ciphertext=cipher,
         api_key_hash=api_key_hash,
         api_key_last4=last4,
@@ -61,8 +70,8 @@ def test_forwarder_retries_on_429_and_switches_key(tmp_path):
     config, db = _setup_db(tmp_path)
     secrets = Secrets(admin_token="admin", master_key="master")
     client, _ = _add_client(db, secrets.master_key)
-    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001")
-    k2 = _add_key(db, secrets.master_key, "fc-key-2", "h2", "0002")
+    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001", client_id=client.id)
+    k2 = _add_key(db, secrets.master_key, "fc-key-2", "h2", "0002", client_id=client.id)
 
     def handler(request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("authorization")
@@ -108,8 +117,8 @@ def test_forwarder_disables_key_on_401_then_uses_next(tmp_path):
     config, db = _setup_db(tmp_path)
     secrets = Secrets(admin_token="admin", master_key="master")
     client, _ = _add_client(db, secrets.master_key)
-    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001")
-    k2 = _add_key(db, secrets.master_key, "fc-key-2", "h2", "0002")
+    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001", client_id=client.id)
+    k2 = _add_key(db, secrets.master_key, "fc-key-2", "h2", "0002", client_id=client.id)
 
     def handler(request: httpx.Request) -> httpx.Response:
         auth = request.headers.get("authorization")
@@ -147,7 +156,7 @@ def test_forwarder_timeout_raises_gateway_error(tmp_path):
     config.firecrawl.max_retries = 0
     secrets = Secrets(admin_token="admin", master_key="master")
     client, _ = _add_client(db, secrets.master_key)
-    _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001")
+    _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001", client_id=client.id)
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("timeout", request=request)
@@ -180,7 +189,7 @@ def test_forwarder_marks_failed_after_threshold(tmp_path):
     config.firecrawl.failure_threshold = 1
     secrets = Secrets(admin_token="admin", master_key="master")
     client, _ = _add_client(db, secrets.master_key)
-    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001")
+    k1 = _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001", client_id=client.id)
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, json={"error": "boom"})
@@ -208,3 +217,58 @@ def test_forwarder_marks_failed_after_threshold(tmp_path):
     assert k1.status == "failed"
     assert k1.cooldown_until is not None
 
+
+def test_forwarder_disables_key_if_decrypt_fails_and_uses_next(tmp_path):
+    config, db = _setup_db(tmp_path)
+    secrets = Secrets(admin_token="admin", master_key="master")
+    client, _ = _add_client(db, secrets.master_key)
+
+    k_bad = ApiKey(
+        client_id=client.id,
+        api_key_ciphertext=b"not-a-valid-aesgcm-blob",
+        api_key_hash="hbad",
+        api_key_last4="0001",
+        is_active=True,
+        status="active",
+        daily_quota=5,
+        daily_usage=0,
+        quota_reset_at=today_in_timezone("UTC"),
+        max_concurrent=1,
+    )
+    db.add(k_bad)
+    db.commit()
+    db.refresh(k_bad)
+
+    k_good = _add_key(db, secrets.master_key, "fc-key-2", "h2", "0002", client_id=client.id)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization")
+        if auth == "Bearer fc-key-2":
+            return httpx.Response(200, json={"ok": True})
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    transport = httpx.MockTransport(handler)
+    fwd = Forwarder(
+        config=config,
+        secrets=secrets,
+        key_pool=KeyPool(),
+        key_concurrency=ConcurrencyManager(),
+        transport=transport,
+    )
+
+    result = fwd.forward(
+        db=db,
+        request_id="req_12345678",
+        client=client,
+        method="POST",
+        upstream_path="/scrape",
+        json_body={"url": "https://example.com"},
+        inbound_headers={"content-type": "application/json"},
+    )
+
+    assert result.upstream_status_code == 200
+    assert result.api_key_id == k_good.id
+
+    db.refresh(k_bad)
+    assert k_bad.status == "decrypt_failed"
+    assert k_bad.is_active is False

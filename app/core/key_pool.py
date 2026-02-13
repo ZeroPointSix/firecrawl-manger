@@ -43,25 +43,34 @@ def _cooldown_remaining_seconds(key: ApiKey, now: datetime) -> int:
 class KeyPool:
     def __init__(self, *, cooldown_store: object | None = None) -> None:
         self._lock = threading.Lock()
-        self._rr_index = 0
+        self._rr_index_by_scope: dict[str, int] = {}
         self._cooldown_store = cooldown_store or NoopCooldownStore()
 
-    def select(self, db: Session, config: AppConfig) -> SelectedKey:
+    def select(self, db: Session, config: AppConfig, *, client_id: int | None = None) -> SelectedKey:
         now = now_utc()
         today = today_in_timezone(config.quota.timezone)
 
         try:
-            keys = db.query(ApiKey).order_by(ApiKey.id.asc()).all()
+            q = db.query(ApiKey).order_by(ApiKey.id.asc())
+            if client_id is not None:
+                q = q.filter(ApiKey.client_id == client_id)
+            keys = q.all()
         except Exception as exc:
             logger.exception("db.keys_list_failed", extra={"fields": {"op": "keys_list"}})
             raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
         if not keys:
-            raise FcamError(status_code=503, code="NO_KEY_CONFIGURED", message="No key configured")
+            msg = "No key configured"
+            if client_id is not None:
+                msg = "No key configured for client"
+            raise FcamError(status_code=503, code="NO_KEY_CONFIGURED", message=msg)
 
         any_active = any(k.is_active for k in keys)
         if not any_active:
-            raise FcamError(status_code=503, code="ALL_KEYS_DISABLED", message="All keys disabled")
+            msg = "All keys disabled"
+            if client_id is not None:
+                msg = "All keys disabled for client"
+            raise FcamError(status_code=503, code="ALL_KEYS_DISABLED", message=msg)
 
         cooling_retry_after: int | None = None
         quota_retry_after: int | None = None
@@ -69,8 +78,9 @@ class KeyPool:
         quota_seen = 0
         disabled_seen = 0
 
+        scope = f"client:{client_id}" if client_id is not None else "global"
         with self._lock:
-            start = self._rr_index % len(keys)
+            start = self._rr_index_by_scope.get(scope, 0) % len(keys)
 
         for offset in range(len(keys)):
             idx = (start + offset) % len(keys)
@@ -119,7 +129,7 @@ class KeyPool:
                 raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
             with self._lock:
-                self._rr_index = idx + 1
+                self._rr_index_by_scope[scope] = idx + 1
 
             return SelectedKey(api_key=key, today=today, now=now)
 
@@ -142,4 +152,7 @@ class KeyPool:
                 retry_after=cooling_retry_after,
             )
 
-        raise FcamError(status_code=503, code="NO_KEY_CONFIGURED", message="No key available")
+        msg = "No key available"
+        if client_id is not None:
+            msg = "No key available for client"
+        raise FcamError(status_code=503, code="NO_KEY_AVAILABLE", message=msg)

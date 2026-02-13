@@ -7,7 +7,8 @@ import os
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-_AAD = b"fcam:api_key:v1"
+_AAD_API_KEY = b"fcam:api_key:v1"
+_AAD_ACCOUNT_PASSWORD = b"fcam:account_password:v1"
 _NONCE_BYTES = 12
 
 
@@ -32,7 +33,7 @@ def constant_time_equals(a: str, b: str) -> bool:
 def encrypt_api_key(master_key: bytes, plaintext: str) -> bytes:
     aes = AESGCM(master_key)
     nonce = os.urandom(_NONCE_BYTES)
-    ciphertext = aes.encrypt(nonce, plaintext.encode("utf-8"), _AAD)
+    ciphertext = aes.encrypt(nonce, plaintext.encode("utf-8"), _AAD_API_KEY)
     return nonce + ciphertext
 
 
@@ -42,11 +43,27 @@ def decrypt_api_key(master_key: bytes, blob: bytes) -> str:
     nonce = blob[:_NONCE_BYTES]
     ciphertext = blob[_NONCE_BYTES:]
     aes = AESGCM(master_key)
-    plaintext = aes.decrypt(nonce, ciphertext, _AAD)
+    plaintext = aes.decrypt(nonce, ciphertext, _AAD_API_KEY)
+    return plaintext.decode("utf-8")
+
+
+def encrypt_account_password(master_key: bytes, plaintext: str) -> bytes:
+    aes = AESGCM(master_key)
+    nonce = os.urandom(_NONCE_BYTES)
+    ciphertext = aes.encrypt(nonce, plaintext.encode("utf-8"), _AAD_ACCOUNT_PASSWORD)
+    return nonce + ciphertext
+
+
+def decrypt_account_password(master_key: bytes, blob: bytes) -> str:
+    if len(blob) < _NONCE_BYTES:
+        raise ValueError("Invalid ciphertext")
+    nonce = blob[:_NONCE_BYTES]
+    ciphertext = blob[_NONCE_BYTES:]
+    aes = AESGCM(master_key)
+    plaintext = aes.decrypt(nonce, ciphertext, _AAD_ACCOUNT_PASSWORD)
     return plaintext.decode("utf-8")
 
 
 def mask_api_key_last4(api_key_last4: str) -> str:
     last4 = (api_key_last4 or "")[-4:]
     return f"fc-****{last4}" if last4 else "fc-****"
-

@@ -6,6 +6,7 @@ __pycache__/
 .tools/
 .python-version
 .vscode/
+node_modules/
 
 *.pyc
 *.pyo
@@ -24,3 +25,5 @@ coverage.xml
 
 data/
 logs/
+example/
+app/ui2/

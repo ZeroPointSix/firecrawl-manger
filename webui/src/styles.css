@@ -1,0 +1,101 @@
+@import "./assets/style.css";
+
+/* 项目内常用工具类（基于 gpt-load 变量命名） */
+.muted {
+  color: var(--text-secondary);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.split-panel {
+  border-radius: var(--border-radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border-color-light);
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  min-width: 0;
+}
+
+/* Naive UI 主按钮做轻量“蓝紫渐变”增强（保持 gpt-load 风格一致） */
+:root:not(.dark) .n-button.n-button--primary-type:not(.n-button--disabled) {
+  background: var(--primary-gradient) !important;
+  border-color: transparent !important;
+}
+
+:root:not(.dark) .n-button.n-button--primary-type:not(.n-button--disabled):hover {
+  filter: brightness(1.03);
+}
+
+.split-left {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-width: 120px;
+  max-width: 520px;
+  min-height: 0;
+  background: var(--card-bg-solid);
+}
+
+.split-left-header {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color-light);
+  background: var(--header-bg);
+}
+
+.split-left-body {
+  flex: 1;
+  overflow: auto;
+}
+
+.split-right {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.split-handle {
+  flex: 0 0 2px;
+  width: 2px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+}
+
+.split-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: var(--hover-bg);
+}
+
+.split-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: -6px;
+  right: -6px;
+}
+
+.split-handle:hover::before,
+.split-handle.dragging::before {
+  opacity: 1;
+}
+
+.client-item-active {
+  background: var(--hover-bg);
+}
+
+.client-meta {
+  min-width: 0;
+}
+
+.client-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}

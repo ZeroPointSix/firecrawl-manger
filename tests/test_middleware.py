@@ -74,3 +74,12 @@ def test_path_whitelist_blocks_unknown_api_paths(tmp_path):
     assert resp.status_code == 404
     body = resp.json()
     assert body["error"]["code"] == "PATH_NOT_ALLOWED"
+
+
+def test_path_whitelist_blocks_unknown_v1_paths(tmp_path):
+    app = _make_app(tmp_path, allowed_paths={"scrape"})
+    client = TestClient(app)
+    resp = client.post("/v1/evil", json={"x": 1})
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "PATH_NOT_ALLOWED"

@@ -29,6 +29,14 @@ _ENDPOINT_CASES = [
     ("POST", "/api/agent", "/v1/agent"),
 ]
 
+_COMPAT_ENDPOINT_CASES = [
+    ("POST", "/v1/scrape", "/v1/scrape"),
+    ("POST", "/v1/crawl", "/v1/crawl"),
+    ("GET", "/v1/crawl/abc123", "/v1/crawl/abc123"),
+    ("POST", "/v1/search", "/v1/search"),
+    ("POST", "/v1/agent", "/v1/agent"),
+]
+
 
 def _make_app(tmp_path, *, handler):
     config = AppConfig()
@@ -62,9 +70,11 @@ def _make_app(tmp_path, *, handler):
             max_concurrent=10,
         )
         db.add(c)
+        db.flush()
 
         key_bytes = derive_master_key_bytes(secrets.master_key)
         k = ApiKey(
+            client_id=c.id,
             api_key_ciphertext=encrypt_api_key(key_bytes, "fc-key-1"),
             api_key_hash="h1",
             api_key_last4="0001",
@@ -170,6 +180,34 @@ def test_api_concurrency_limited(tmp_path):
     _ENDPOINT_CASES,
 )
 def test_api_endpoints_forward_to_expected_upstream(tmp_path, method: str, path: str, expected_upstream_path: str):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"ok": True})
+
+    app, token = _make_app(tmp_path, handler=handler)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app) as client:
+        if method == "GET":
+            resp = client.get(path, headers=headers)
+        else:
+            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+
+    assert resp.status_code == 200
+    assert seen["method"] == method
+    assert seen["path"] == expected_upstream_path
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected_upstream_path"),
+    _COMPAT_ENDPOINT_CASES,
+)
+def test_firecrawl_compat_endpoints_forward_to_expected_upstream(
+    tmp_path, method: str, path: str, expected_upstream_path: str
+):
     seen: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -325,8 +363,10 @@ def test_api_request_log_includes_retry_count(tmp_path):
 
     SessionLocal = app.state.db_session_factory
     with SessionLocal() as db:
+        c = db.query(Client).one()
         key_bytes = derive_master_key_bytes(app.state.secrets.master_key)
         k2 = ApiKey(
+            client_id=c.id,
             api_key_ciphertext=encrypt_api_key(key_bytes, "fc-key-2"),
             api_key_hash="h2",
             api_key_last4="0002",

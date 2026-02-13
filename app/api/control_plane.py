@@ -2,24 +2,30 @@ from __future__ import annotations
 
 import logging
 import secrets as py_secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from cryptography.exceptions import InvalidTag
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_config, get_db, get_secrets, require_admin
 from app.config import AppConfig, Secrets
 from app.core.security import (
+    decrypt_api_key,
     derive_master_key_bytes,
+    encrypt_account_password,
     encrypt_api_key,
     hmac_sha256_hex,
     mask_api_key_last4,
 )
+from app.core.key_import import parse_keys_text
 from app.core.time import today_in_timezone
-from app.db.models import ApiKey, AuditLog, Client, RequestLog
+from app.db.models import ApiKey, AuditLog, Client, IdempotencyRecord, RequestLog
 from app.errors import FcamError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +51,14 @@ def _limit(limit: int) -> int:
     if limit > 200:
         raise FcamError(status_code=400, code="VALIDATION_ERROR", message="limit too large")
     return limit
+
+
+def _request_log_level(*, status_code: int | None, success: bool | None) -> str:
+    if success is True and status_code is not None and status_code < 400:
+        return "info"
+    if status_code is not None and 400 <= status_code < 500:
+        return "warn"
+    return "error"
 
 
 def _audit(
@@ -76,8 +90,11 @@ def _key_item(key: ApiKey, *, request: Request) -> dict[str, Any]:
     current_concurrent = request.app.state.key_concurrency.current(str(key.id))
     return {
         "id": key.id,
+        "client_id": key.client_id,
         "name": key.name,
         "api_key_masked": mask_api_key_last4(key.api_key_last4),
+        "account_username": key.account_username,
+        "account_verified_at": _dt_to_rfc3339(key.account_verified_at),
         "plan_type": key.plan_type,
         "is_active": key.is_active,
         "status": key.status,
@@ -111,6 +128,7 @@ def _client_item(client: Client) -> dict[str, Any]:
 
 class CreateKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=8)
+    client_id: int | None = Field(default=None, ge=0, description="0 means unassigned")
     name: str | None = Field(default=None, max_length=255)
     plan_type: str = Field(default="free", max_length=32)
     daily_quota: int = Field(default=5, ge=0)
@@ -120,17 +138,29 @@ class CreateKeyRequest(BaseModel):
 
 
 class UpdateKeyRequest(BaseModel):
+    client_id: int | None = Field(default=None, ge=0, description="0 means unassigned")
     name: str | None = Field(default=None, max_length=255)
     plan_type: str | None = Field(default=None, max_length=32)
     daily_quota: int | None = Field(default=None, ge=0)
     max_concurrent: int | None = Field(default=None, ge=0)
     rate_limit_per_min: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
+    api_key: str | None = Field(default=None, min_length=8, description="Rotate/replace the upstream API key")
 
 
 class TestKeyRequest(BaseModel):
     mode: str = "scrape"
     test_url: str = "https://example.com"
+
+
+class ImportKeysTextRequest(BaseModel):
+    client_id: int | None = Field(default=None, ge=0, description="0 means unassigned")
+    text: str = Field(..., min_length=1, description="One key per line. Format: user|pass|api_key|verified_at")
+    plan_type: str = Field(default="free", max_length=32)
+    daily_quota: int = Field(default=5, ge=0)
+    max_concurrent: int = Field(default=2, ge=0)
+    rate_limit_per_min: int = Field(default=10, ge=0)
+    is_active: bool = True
 
 
 class CreateClientRequest(BaseModel):
@@ -149,13 +179,52 @@ class UpdateClientRequest(BaseModel):
 
 
 @router.get("/keys")
-def list_keys(request: Request, db: Session = Depends(get_db)) -> dict[str, Any]:
+def list_keys(
+    request: Request,
+    db: Session = Depends(get_db),
+    client_id: int | None = Query(default=None),
+    page: int | None = Query(default=None, ge=1),
+    page_size: int | None = Query(default=None, ge=1, le=200),
+    q_: str | None = Query(default=None, alias="q"),
+) -> dict[str, Any]:
     try:
-        keys = db.query(ApiKey).order_by(ApiKey.id.desc()).all()
+        q = db.query(ApiKey).order_by(ApiKey.id.desc())
+        if client_id is not None:
+            if client_id == 0:
+                q = q.filter(ApiKey.client_id.is_(None))
+            else:
+                q = q.filter(ApiKey.client_id == client_id)
+        if q_ is not None and q_.strip():
+            q_raw = q_.strip()
+            if len(q_raw) > 200:
+                raise FcamError(status_code=400, code="VALIDATION_ERROR", message="q too long")
+            pattern = f"%{q_raw.lower()}%"
+            q = q.filter(func.lower(func.coalesce(ApiKey.name, "")).like(pattern))
+
+        use_pagination = page is not None or page_size is not None or (q_ is not None and q_.strip())
+        if not use_pagination:
+            keys = q.all()
+            return {"items": [_key_item(k, request=request) for k in keys]}
+
+        page_n = int(page or 1)
+        page_size_n = int(page_size or 20)
+        total_items = q.count()
+        total_pages = (total_items + page_size_n - 1) // page_size_n if page_size_n else 0
+        keys = q.offset((page_n - 1) * page_size_n).limit(page_size_n).all()
+    except FcamError:
+        raise
     except Exception as exc:
         logger.exception("db.keys_list_failed", extra={"fields": {"op": "keys_list"}})
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
-    return {"items": [_key_item(k, request=request) for k in keys]}
+    return {
+        "items": [_key_item(k, request=request) for k in keys],
+        "pagination": {
+            "page": page_n,
+            "page_size": page_size_n,
+            "total_items": total_items,
+            "total_pages": total_pages,
+        },
+    }
 
 
 @router.post("/keys", status_code=201)
@@ -169,6 +238,14 @@ def create_key(
     if not secrets.master_key:
         raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
 
+    client_id: int | None = None
+    if payload.client_id is not None:
+        client_id = None if payload.client_id == 0 else int(payload.client_id)
+        if client_id is not None:
+            exists = db.query(Client.id).filter(Client.id == client_id).one_or_none()
+            if exists is None:
+                raise FcamError(status_code=404, code="NOT_FOUND", message="Client not found")
+
     master_key_bytes = derive_master_key_bytes(secrets.master_key)
     api_key_hash = hmac_sha256_hex(master_key_bytes, payload.api_key)
     last4 = payload.api_key[-4:]
@@ -178,6 +255,7 @@ def create_key(
     status = "active" if payload.is_active else "disabled"
 
     key = ApiKey(
+        client_id=client_id,
         api_key_ciphertext=ciphertext,
         api_key_hash=api_key_hash,
         api_key_last4=last4,
@@ -209,16 +287,181 @@ def create_key(
     return _key_item(key, request=request)
 
 
+@router.post("/keys/import-text")
+def import_keys_text(
+    request: Request,
+    payload: ImportKeysTextRequest = Body(...),
+    db: Session = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+    secrets: Secrets = Depends(get_secrets),
+) -> dict[str, Any]:
+    if not secrets.master_key:
+        raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
+
+    client_id: int | None = None
+    if payload.client_id is not None:
+        client_id = None if payload.client_id == 0 else int(payload.client_id)
+        if client_id is not None:
+            exists = db.query(Client.id).filter(Client.id == client_id).one_or_none()
+            if exists is None:
+                raise FcamError(status_code=404, code="NOT_FOUND", message="Client not found")
+
+    items, parse_failures = parse_keys_text(payload.text)
+    failures: list[dict[str, Any]] = [
+        {"line_no": f.line_no, "raw": f.raw, "message": f.message} for f in parse_failures
+    ]
+    if not items and failures:
+        raise FcamError(status_code=400, code="VALIDATION_ERROR", message="No valid lines to import")
+
+    master_key_bytes = derive_master_key_bytes(secrets.master_key)
+    today = today_in_timezone(config.quota.timezone)
+    status = "active" if payload.is_active else "disabled"
+
+    created = 0
+    updated = 0
+    skipped = 0
+
+    for item in items:
+        api_key_hash = hmac_sha256_hex(master_key_bytes, item.api_key)
+        last4 = item.api_key[-4:]
+        ciphertext = encrypt_api_key(master_key_bytes, item.api_key)
+        pwd_cipher = (
+            encrypt_account_password(master_key_bytes, item.account_password) if item.account_password else None
+        )
+
+        try:
+            with db.begin_nested():
+                key = ApiKey(
+                    client_id=client_id,
+                    api_key_ciphertext=ciphertext,
+                    api_key_hash=api_key_hash,
+                    api_key_last4=last4,
+                    account_username=item.account_username,
+                    account_password_ciphertext=pwd_cipher,
+                    account_verified_at=item.account_verified_at,
+                    name=None,
+                    plan_type=payload.plan_type,
+                    is_active=payload.is_active,
+                    status=status,
+                    daily_quota=payload.daily_quota,
+                    daily_usage=0,
+                    quota_reset_at=today,
+                    max_concurrent=payload.max_concurrent,
+                    rate_limit_per_min=payload.rate_limit_per_min,
+                )
+                db.add(key)
+                db.flush()
+                _audit(
+                    db,
+                    request=request,
+                    action="key.import_text.create",
+                    resource_type="api_key",
+                    resource_id=str(key.id),
+                )
+                created += 1
+        except IntegrityError:
+            try:
+                with db.begin_nested():
+                    existing = db.query(ApiKey).filter(ApiKey.api_key_hash == api_key_hash).one_or_none()
+                    if existing is None:
+                        failures.append(
+                            {
+                                "line_no": item.line_no,
+                                "raw": item.raw,
+                                "message": "duplicate api key but existing record missing",
+                            }
+                        )
+                        continue
+
+                    changed = False
+
+                    if client_id is not None:
+                        if existing.client_id is None:
+                            existing.client_id = client_id
+                            changed = True
+                        elif existing.client_id != client_id:
+                            failures.append(
+                                {
+                                    "line_no": item.line_no,
+                                    "raw": item.raw,
+                                    "message": "api key already bound to a different client",
+                                }
+                            )
+                            continue
+
+                    if item.account_username and not existing.account_username:
+                        existing.account_username = item.account_username
+                        changed = True
+                    if pwd_cipher is not None and existing.account_password_ciphertext is None:
+                        existing.account_password_ciphertext = pwd_cipher
+                        changed = True
+                    if item.account_verified_at and existing.account_verified_at is None:
+                        existing.account_verified_at = item.account_verified_at
+                        changed = True
+
+                    if changed:
+                        _audit(
+                            db,
+                            request=request,
+                            action="key.import_text.update",
+                            resource_type="api_key",
+                            resource_id=str(existing.id),
+                        )
+                        updated += 1
+                    else:
+                        skipped += 1
+            except Exception as exc:
+                failures.append({"line_no": item.line_no, "raw": item.raw, "message": str(exc)})
+        except Exception as exc:
+            failures.append({"line_no": item.line_no, "raw": item.raw, "message": str(exc)})
+
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "failed": len(failures),
+        "failures": failures,
+    }
+
+
 @router.put("/keys/{key_id}")
 def update_key(
     request: Request,
     key_id: int,
     payload: UpdateKeyRequest = Body(...),
     db: Session = Depends(get_db),
+    secrets: Secrets = Depends(get_secrets),
 ) -> dict[str, Any]:
     key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
     if key is None:
         raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
+
+    if payload.client_id is not None:
+        if payload.client_id == 0:
+            key.client_id = None
+        else:
+            exists = db.query(Client.id).filter(Client.id == payload.client_id).one_or_none()
+            if exists is None:
+                raise FcamError(status_code=404, code="NOT_FOUND", message="Client not found")
+            key.client_id = payload.client_id
+
+    if payload.api_key is not None:
+        if not secrets.master_key:
+            raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
+        master_key_bytes = derive_master_key_bytes(secrets.master_key)
+        api_key_hash = hmac_sha256_hex(master_key_bytes, payload.api_key)
+        last4 = payload.api_key[-4:]
+        ciphertext = encrypt_api_key(master_key_bytes, payload.api_key)
+        key.api_key_ciphertext = ciphertext
+        key.api_key_hash = api_key_hash
+        key.api_key_last4 = last4
+        _audit(db, request=request, action="key.rotate", resource_type="api_key", resource_id=str(key.id))
 
     if payload.name is not None:
         key.name = payload.name
@@ -243,6 +486,9 @@ def update_key(
         _audit(db, request=request, action="key.update", resource_type="api_key", resource_id=str(key.id))
         db.commit()
         db.refresh(key)
+    except IntegrityError as exc:
+        db.rollback()
+        raise FcamError(status_code=409, code="API_KEY_DUPLICATE", message="Duplicate api key") from exc
     except Exception as exc:
         db.rollback()
         logger.exception("db.key_update_failed", extra={"fields": {"api_key_id": key_id}})
@@ -266,6 +512,28 @@ def delete_key(request: Request, key_id: int, db: Session = Depends(get_db)) -> 
     except Exception as exc:
         db.rollback()
         logger.exception("db.key_delete_failed", extra={"fields": {"api_key_id": key_id}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    return Response(status_code=204)
+
+
+@router.delete("/keys/{key_id}/purge", status_code=204)
+def purge_key(request: Request, key_id: int, db: Session = Depends(get_db)) -> Response:
+    key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+    if key is None:
+        raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
+
+    try:
+        db.query(RequestLog).filter(RequestLog.api_key_id == key.id).update(
+            {RequestLog.api_key_id: None},
+            synchronize_session=False,
+        )
+        _audit(db, request=request, action="key.purge", resource_type="api_key", resource_id=str(key.id))
+        db.delete(key)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("db.key_purge_failed", extra={"fields": {"api_key_id": key_id}})
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
     return Response(status_code=204)
@@ -442,6 +710,35 @@ def delete_client(request: Request, client_id: int, db: Session = Depends(get_db
     return Response(status_code=204)
 
 
+@router.delete("/clients/{client_id}/purge", status_code=204)
+def purge_client(request: Request, client_id: int, db: Session = Depends(get_db)) -> Response:
+    client = db.query(Client).filter(Client.id == client_id).one_or_none()
+    if client is None:
+        raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
+
+    try:
+        db.query(ApiKey).filter(ApiKey.client_id == client.id).update(
+            {ApiKey.client_id: None},
+            synchronize_session=False,
+        )
+        db.query(RequestLog).filter(RequestLog.client_id == client.id).update(
+            {RequestLog.client_id: None},
+            synchronize_session=False,
+        )
+        db.query(IdempotencyRecord).filter(IdempotencyRecord.client_id == client.id).delete(
+            synchronize_session=False
+        )
+        _audit(db, request=request, action="client.purge", resource_type="client", resource_id=str(client.id))
+        db.delete(client)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("db.client_purge_failed", extra={"fields": {"client_id": client_id}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    return Response(status_code=204)
+
+
 @router.post("/clients/{client_id}/rotate")
 def rotate_client_token(
     request: Request,
@@ -469,6 +766,181 @@ def rotate_client_token(
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
     return {"client_id": client.id, "token": token}
+
+
+@router.get("/encryption-status")
+def encryption_status(
+    db: Session = Depends(get_db),
+    secrets: Secrets = Depends(get_secrets),
+) -> dict[str, Any]:
+    if not secrets.master_key:
+        return {
+            "master_key_configured": False,
+            "has_decrypt_failures": False,
+            "suggestion": "Set FCAM_MASTER_KEY (must stay stable across restarts)",
+        }
+
+    master_key_bytes = derive_master_key_bytes(secrets.master_key)
+
+    try:
+        keys = db.query(ApiKey).order_by(ApiKey.id.asc()).all()
+    except Exception as exc:
+        logger.exception("db.keys_list_failed", extra={"fields": {"op": "keys_list"}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    has_decrypt_failures = any(k.status == "decrypt_failed" for k in keys)
+    if not has_decrypt_failures:
+        for key in keys[:200]:
+            try:
+                decrypt_api_key(master_key_bytes, key.api_key_ciphertext)
+            except (InvalidTag, ValueError):
+                has_decrypt_failures = True
+                break
+
+    return {
+        "master_key_configured": True,
+        "has_decrypt_failures": has_decrypt_failures,
+        "suggestion": (
+            "Use the same FCAM_MASTER_KEY that was used to encrypt keys, or rotate/re-import affected keys"
+            if has_decrypt_failures
+            else ""
+        ),
+    }
+
+
+@router.get("/dashboard/stats")
+def dashboard_stats(
+    db: Session = Depends(get_db),
+    client_id: int | None = Query(default=None),
+) -> dict[str, Any]:
+    cutoff = datetime.utcnow() - timedelta(hours=24)
+
+    try:
+        keys_q = db.query(ApiKey)
+        if client_id is not None:
+            keys_q = (
+                keys_q.join(Client, Client.id == ApiKey.client_id)
+                .filter(ApiKey.client_id == client_id, Client.is_active.is_(True))
+            )
+        else:
+            keys_q = (
+                keys_q.outerjoin(Client, Client.id == ApiKey.client_id)
+                .filter(or_(ApiKey.client_id.is_(None), Client.is_active.is_(True)))
+            )
+
+        keys_total = keys_q.count()
+        keys_failed = keys_q.filter(ApiKey.status.in_(["failed", "decrypt_failed"])).count()
+
+        clients_q = db.query(Client).filter(Client.is_active.is_(True))
+        if client_id is not None:
+            clients_q = clients_q.filter(Client.id == client_id)
+        clients_total = clients_q.count()
+
+        logs_q = (
+            db.query(RequestLog)
+            .join(Client, Client.id == RequestLog.client_id)
+            .filter(RequestLog.created_at >= cutoff, Client.is_active.is_(True))
+        )
+        if client_id is not None:
+            logs_q = logs_q.filter(RequestLog.client_id == client_id)
+        # 不将未认证/无 client_id 的请求计入“业务侧请求量”
+
+        requests_total = logs_q.count()
+        requests_failed = logs_q.filter(
+            (RequestLog.success.is_(False)) | (RequestLog.success.is_(None))
+        ).count()
+
+    except Exception as exc:
+        logger.exception("db.dashboard_stats_failed", extra={"fields": {"op": "dashboard_stats"}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    error_rate = (requests_failed / requests_total * 100.0) if requests_total else 0.0
+
+    return {
+        "keys": {"total": keys_total, "failed": keys_failed},
+        "clients": {"total": clients_total},
+        "requests_24h": {
+            "total": requests_total,
+            "failed": requests_failed,
+            "error_rate": round(error_rate, 3),
+        },
+    }
+
+
+@router.get("/dashboard/chart")
+def dashboard_chart(
+    db: Session = Depends(get_db),
+    range_: str = Query(default="24h", alias="range"),
+    bucket: str = Query(default="hour"),
+    client_id: int | None = Query(default=None),
+    tz: str = Query(default="UTC"),
+) -> dict[str, Any]:
+    if range_ != "24h":
+        raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported range")
+    if bucket != "hour":
+        raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported bucket")
+
+    try:
+        tzinfo = ZoneInfo(tz)
+    except Exception as exc:
+        raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Invalid tz") from exc
+
+    now_tz = datetime.now(tzinfo)
+    end_hour = now_tz.replace(minute=0, second=0, microsecond=0)
+    start_hour = end_hour - timedelta(hours=23)
+
+    start_utc = start_hour.astimezone(timezone.utc).replace(tzinfo=None)
+    end_exclusive_utc = (end_hour + timedelta(hours=1)).astimezone(timezone.utc).replace(tzinfo=None)
+
+    try:
+        logs_q = (
+            db.query(RequestLog.created_at, RequestLog.success)
+            .join(Client, Client.id == RequestLog.client_id)
+            .filter(
+                RequestLog.created_at >= start_utc,
+                RequestLog.created_at < end_exclusive_utc,
+                Client.is_active.is_(True),
+            )
+        )
+        if client_id is not None:
+            logs_q = logs_q.filter(RequestLog.client_id == client_id)
+        rows = logs_q.all()
+    except Exception as exc:
+        logger.exception("db.dashboard_chart_failed", extra={"fields": {"op": "dashboard_chart"}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    success_counts = [0] * 24
+    failed_counts = [0] * 24
+
+    for created_at, success in rows:
+        if created_at is None:
+            continue
+        dt = created_at if created_at.tzinfo is not None else created_at.replace(tzinfo=timezone.utc)
+        dt_tz = dt.astimezone(tzinfo)
+        dt_bucket = dt_tz.replace(minute=0, second=0, microsecond=0)
+        idx = int((dt_bucket - start_hour).total_seconds() // 3600)
+        if idx < 0 or idx >= 24:
+            continue
+        if success is True:
+            success_counts[idx] += 1
+        else:
+            failed_counts[idx] += 1
+
+    labels = [
+        (start_hour + timedelta(hours=i)).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        for i in range(24)
+    ]
+
+    return {
+        "range": "24h",
+        "bucket": "hour",
+        "tz": tz,
+        "labels": labels,
+        "datasets": [
+            {"label": "success", "color": "#43e97b", "data": success_counts},
+            {"label": "failed", "color": "#f5576c", "data": failed_counts},
+        ],
+    }
 
 
 @router.get("/stats")
@@ -574,11 +1046,21 @@ def query_logs(
     endpoint: str | None = Query(default=None),
     status_code: int | None = Query(default=None),
     success: bool | None = Query(default=None),
+    level: str | None = Query(default=None),
+    q_: str | None = Query(default=None, alias="q"),
     request_id: str | None = Query(default=None),
     idempotency_key: str | None = Query(default=None),
 ) -> dict[str, Any]:
     limit_n = _limit(limit)
     q = db.query(RequestLog, ApiKey.api_key_last4).outerjoin(ApiKey, ApiKey.id == RequestLog.api_key_id)
+
+    level_v: str | None = None
+    if level is not None and level.strip():
+        level_v = level.strip().lower()
+        if level_v not in {"info", "warn", "error"}:
+            raise FcamError(
+                status_code=400, code="VALIDATION_ERROR", message="level must be one of info|warn|error"
+            )
 
     if cursor is not None:
         q = q.filter(RequestLog.id < cursor)
@@ -596,10 +1078,37 @@ def query_logs(
         q = q.filter(RequestLog.status_code == status_code)
     if success is not None:
         q = q.filter(RequestLog.success == success)
+    if q_ is not None and q_.strip():
+        q_raw = q_.strip()
+        if len(q_raw) > 200:
+            raise FcamError(status_code=400, code="VALIDATION_ERROR", message="q too long")
+
+        q_text = q_raw.lower()
+        pattern = f"%{q_text}%"
+        q = q.filter(
+            or_(
+                func.lower(RequestLog.request_id).like(pattern),
+                func.lower(RequestLog.endpoint).like(pattern),
+                func.lower(func.coalesce(RequestLog.error_message, "")).like(pattern),
+            )
+        )
     if request_id is not None:
         q = q.filter(RequestLog.request_id == request_id)
     if idempotency_key is not None:
         q = q.filter(RequestLog.idempotency_key == idempotency_key)
+
+    if level_v == "info":
+        q = q.filter(RequestLog.status_code.isnot(None), RequestLog.status_code < 400, RequestLog.success.is_(True))
+    elif level_v == "warn":
+        q = q.filter(RequestLog.status_code.isnot(None), RequestLog.status_code >= 400, RequestLog.status_code < 500)
+    elif level_v == "error":
+        q = q.filter(
+            or_(
+                RequestLog.status_code.is_(None),
+                RequestLog.status_code >= 500,
+                (RequestLog.status_code < 400) & (func.coalesce(RequestLog.success, False).is_(False)),
+            )
+        )
 
     q = q.order_by(RequestLog.id.desc())
 
@@ -613,6 +1122,7 @@ def query_logs(
             {
                 "id": log.id,
                 "created_at": _dt_to_rfc3339(log.created_at),
+                "level": _request_log_level(status_code=log.status_code, success=log.success),
                 "request_id": log.request_id,
                 "client_id": log.client_id,
                 "api_key_id": log.api_key_id,

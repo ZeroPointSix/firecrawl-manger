@@ -27,6 +27,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/bootstrap-python.ps
 浏览器入口：
 - Swagger：`GET /docs`（`server.enable_docs=true`）
 - 内置 WebUI：`GET /ui/`（`server.enable_control_plane=true`；顶部横向标签：概览/Keys/Clients/Logs/Audit/帮助；Admin Token 可配置持久化/过期；Dashboard 提供 `/api/scrape` 端到端自检）
+- WebUI v2（Vue）：`GET /ui2/`（需先在 `webui/` 执行 `npm install` + `npm run build` 生成 `app/ui2/`；该目录在 `.gitignore` 中，仅本地/发布构建时存在）
 
 ### 通用（已安装 Python）
 
@@ -45,6 +46,28 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 运行测试（覆盖率门禁）：
 ```bash
 pytest --cov=app --cov-fail-under=80
+```
+
+真实 API E2E 测试（不使用 TestClient，不写 DB seed；通过 HTTP 请求驱动）：
+```powershell
+$env:FCAM_E2E="1"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py"
+```
+
+可选：启用“真实上游”（会真实调用 Firecrawl，有配额/费用风险，请仅在隔离环境执行）：
+```powershell
+$env:FCAM_E2E="1"
+$env:FCAM_E2E_ALLOW_UPSTREAM="1"
+$env:FCAM_E2E_FIRECRAWL_API_KEY="<your_firecrawl_api_key>"
+# $env:FCAM_E2E_SCRAPE_URL="https://example.com"  # 可选
+& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
+
+```
+
+如不想在命令行暴露 key，可在仓库根目录创建本地文件 `.env.e2e`（已被 `.gitignore` 忽略），写入：
+```text
+FCAM_E2E_FIRECRAWL_API_KEY=...
+FCAM_E2E_SCRAPE_URL=https://example.com
 ```
 
 ## 实施日志

@@ -8,6 +8,7 @@ from time import perf_counter
 from typing import Any
 
 import httpx
+from cryptography.exceptions import InvalidTag
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from app.config import AppConfig, Secrets
 from app.core.concurrency import ConcurrencyManager
 from app.core.key_pool import KeyPool
 from app.core.cooldown import NoopCooldownStore
+from app.core.rate_limit import TokenBucketRateLimiter
 from app.core.security import decrypt_api_key, derive_master_key_bytes
 from app.db.models import ApiKey, Client
 from app.errors import FcamError
@@ -112,6 +114,7 @@ class Forwarder:
         secrets: Secrets,
         key_pool: KeyPool,
         key_concurrency: ConcurrencyManager,
+        key_rate_limiter: TokenBucketRateLimiter | None = None,
         metrics: Metrics | None = None,
         cooldown_store: object | None = None,
         transport: httpx.BaseTransport | None = None,
@@ -120,12 +123,29 @@ class Forwarder:
         self._master_key = derive_master_key_bytes(secrets.master_key) if secrets.master_key else None
         self._key_pool = key_pool
         self._key_concurrency = key_concurrency
+        self._key_rate_limiter = key_rate_limiter or TokenBucketRateLimiter()
         self._metrics = metrics
         self._cooldown_store = cooldown_store or NoopCooldownStore()
         self._transport = transport
 
         self._failure_lock = threading.Lock()
         self._failures: dict[int, tuple[int, datetime]] = {}
+
+    def _disable_key_decrypt_failed(self, db: Session, key: ApiKey) -> None:
+        try:
+            key.status = "decrypt_failed"
+            key.is_active = False
+            db.commit()
+            logger.warning(
+                "key.decrypt_failed",
+                extra={"fields": {"api_key_id": key.id}},
+            )
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "db.key_disable_failed",
+                extra={"fields": {"api_key_id": key.id}},
+            )
 
     def forward(
         self,
@@ -157,12 +177,36 @@ class Forwarder:
             transport=self._transport,
             follow_redirects=False,
         ) as client_http:
-            for attempt in range(total_attempts):
-                selected = self._key_pool.select(db, self._config)
+            max_selection_tries = max(total_attempts * 20, 50)
+            upstream_attempts = 0
+            selection_tries = 0
+            decrypt_failed_seen = False
+
+            while upstream_attempts < total_attempts and selection_tries < max_selection_tries:
+                selection_tries += 1
+                try:
+                    selected = self._key_pool.select(db, self._config, client_id=client.id)
+                except FcamError as exc:
+                    if decrypt_failed_seen and exc.code in {
+                        "NO_KEY_CONFIGURED",
+                        "ALL_KEYS_DISABLED",
+                        "NO_KEY_AVAILABLE",
+                    }:
+                        raise FcamError(
+                            status_code=503,
+                            code="KEY_DECRYPT_FAILED",
+                            message="Failed to decrypt API key; check FCAM_MASTER_KEY",
+                        ) from exc
+                    raise
                 key: ApiKey = selected.api_key
                 last_api_key_id = key.id
                 if self._metrics is not None:
                     self._metrics.record_key_selected(key.id)
+
+                allowed, _retry_after = self._key_rate_limiter.allow(str(key.id), key.rate_limit_per_min)
+                if not allowed:
+                    retry_count += 1
+                    continue
 
                 lease = self._key_concurrency.try_acquire(str(key.id), key.max_concurrent)
                 if lease is None:
@@ -170,7 +214,14 @@ class Forwarder:
                     continue
 
                 try:
-                    plaintext_api_key = decrypt_api_key(self._master_key, key.api_key_ciphertext)
+                    try:
+                        plaintext_api_key = decrypt_api_key(self._master_key, key.api_key_ciphertext)
+                    except (InvalidTag, ValueError):
+                        decrypt_failed_seen = True
+                        self._disable_key_decrypt_failed(db, key)
+                        retry_count += 1
+                        continue
+
                     upstream_headers = dict(safe_headers)
                     upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
 
@@ -185,11 +236,13 @@ class Forwarder:
                         json=json_body,
                     )
                     last_upstream_status = resp.status_code
+                    upstream_attempts += 1
 
                 except httpx.TimeoutException as exc:
                     self._record_failure(db, key, reason="timeout")
                     retry_count += 1
-                    if attempt + 1 >= total_attempts:
+                    upstream_attempts += 1
+                    if upstream_attempts >= total_attempts:
                         logger.info(
                             "upstream.timeout",
                             extra={"fields": {"request_id": request_id, "api_key_id": key.id}},
@@ -204,7 +257,8 @@ class Forwarder:
                 except httpx.HTTPError as exc:
                     self._record_failure(db, key, reason="http_error")
                     retry_count += 1
-                    if attempt + 1 >= total_attempts:
+                    upstream_attempts += 1
+                    if upstream_attempts >= total_attempts:
                         logger.info(
                             "upstream.unavailable",
                             extra={"fields": {"request_id": request_id, "api_key_id": key.id}},
@@ -223,7 +277,7 @@ class Forwarder:
                     cooldown = _parse_retry_after(resp.headers) or self._config.rate_limit.cooldown_seconds
                     self._mark_cooling(db, key, cooldown)
                     retry_count += 1
-                    if attempt + 1 >= total_attempts:
+                    if upstream_attempts >= total_attempts:
                         return ForwardResult(
                             response=_to_fastapi_response(resp),
                             upstream_status_code=last_upstream_status,
@@ -235,7 +289,7 @@ class Forwarder:
                 if resp.status_code in {401, 403}:
                     self._disable_key(db, key, resp.status_code)
                     retry_count += 1
-                    if attempt + 1 >= total_attempts:
+                    if upstream_attempts >= total_attempts:
                         return ForwardResult(
                             response=_to_fastapi_response(resp),
                             upstream_status_code=last_upstream_status,
@@ -247,7 +301,7 @@ class Forwarder:
                 if resp.status_code >= 500:
                     self._record_failure(db, key, reason="upstream_5xx")
                     retry_count += 1
-                    if attempt + 1 >= total_attempts:
+                    if upstream_attempts >= total_attempts:
                         return ForwardResult(
                             response=_to_fastapi_response(resp),
                             upstream_status_code=last_upstream_status,
@@ -266,6 +320,12 @@ class Forwarder:
                     retry_count=retry_count,
                 )
 
+        if upstream_attempts == 0:
+            raise FcamError(
+                status_code=503,
+                code="ALL_KEYS_BUSY",
+                message="All keys busy or rate-limited",
+            )
         raise FcamError(status_code=503, code="UPSTREAM_UNAVAILABLE", message="Upstream unavailable")
 
     def test_key(
@@ -288,7 +348,19 @@ class Forwarder:
 
         start = perf_counter()
         try:
-            plaintext_api_key = decrypt_api_key(self._master_key, key.api_key_ciphertext)
+            try:
+                plaintext_api_key = decrypt_api_key(self._master_key, key.api_key_ciphertext)
+            except (InvalidTag, ValueError):
+                self._disable_key_decrypt_failed(db, key)
+                latency_ms = int((perf_counter() - start) * 1000)
+                return KeyTestResult(
+                    ok=False,
+                    upstream_status_code=None,
+                    latency_ms=latency_ms,
+                    observed_status=key.status,
+                    observed_cooldown_until=key.cooldown_until,
+                )
+
             upstream_headers = dict(headers)
             upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
 
@@ -307,9 +379,21 @@ class Forwarder:
 
             latency_ms = int((perf_counter() - start) * 1000)
 
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
             self._record_failure(db, key, reason="timeout")
             latency_ms = int((perf_counter() - start) * 1000)
+            logger.info(
+                "upstream.key_test_timeout",
+                extra={
+                    "fields": {
+                        "request_id": request_id,
+                        "api_key_id": key.id,
+                        "base_url": self._config.firecrawl.base_url,
+                        "timeout_s": self._config.firecrawl.timeout,
+                        "error": str(exc),
+                    }
+                },
+            )
             return KeyTestResult(
                 ok=False,
                 upstream_status_code=None,
@@ -318,9 +402,20 @@ class Forwarder:
                 observed_cooldown_until=key.cooldown_until,
             )
 
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
             self._record_failure(db, key, reason="http_error")
             latency_ms = int((perf_counter() - start) * 1000)
+            logger.info(
+                "upstream.key_test_http_error",
+                extra={
+                    "fields": {
+                        "request_id": request_id,
+                        "api_key_id": key.id,
+                        "base_url": self._config.firecrawl.base_url,
+                        "error": str(exc),
+                    }
+                },
+            )
             return KeyTestResult(
                 ok=False,
                 upstream_status_code=None,
@@ -342,6 +437,18 @@ class Forwarder:
         if resp.status_code == 429:
             cooldown = _parse_retry_after(resp.headers) or self._config.rate_limit.cooldown_seconds
             self._mark_cooling(db, key, cooldown)
+            logger.info(
+                "upstream.key_test_rate_limited",
+                extra={
+                    "fields": {
+                        "request_id": request_id,
+                        "api_key_id": key.id,
+                        "base_url": self._config.firecrawl.base_url,
+                        "upstream_status_code": resp.status_code,
+                        "cooldown_seconds": int(cooldown),
+                    }
+                },
+            )
             return KeyTestResult(
                 ok=False,
                 upstream_status_code=resp.status_code,
@@ -352,6 +459,17 @@ class Forwarder:
 
         if resp.status_code in {401, 403}:
             self._disable_key(db, key, resp.status_code)
+            logger.info(
+                "upstream.key_test_unauthorized",
+                extra={
+                    "fields": {
+                        "request_id": request_id,
+                        "api_key_id": key.id,
+                        "base_url": self._config.firecrawl.base_url,
+                        "upstream_status_code": resp.status_code,
+                    }
+                },
+            )
             return KeyTestResult(
                 ok=False,
                 upstream_status_code=resp.status_code,
@@ -362,6 +480,17 @@ class Forwarder:
 
         if resp.status_code >= 500:
             self._record_failure(db, key, reason="upstream_5xx")
+            logger.info(
+                "upstream.key_test_5xx",
+                extra={
+                    "fields": {
+                        "request_id": request_id,
+                        "api_key_id": key.id,
+                        "base_url": self._config.firecrawl.base_url,
+                        "upstream_status_code": resp.status_code,
+                    }
+                },
+            )
             return KeyTestResult(
                 ok=False,
                 upstream_status_code=resp.status_code,

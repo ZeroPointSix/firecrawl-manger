@@ -246,3 +246,86 @@
 **本次验证结果**
 - `pytest -q tests/test_api_data_plane.py::test_api_endpoints_forward_to_expected_upstream ...`：通过（MockTransport 模拟上游，覆盖 scrape/crawl/agent 转发路径与幂等行为）
 - `pytest --cov=app --cov-fail-under=80`：通过（93 passed；Total coverage 85.32%）
+
+## 2026-02-12（UTC）
+
+### WebUI 重构（/ui2：Vue3 + Vite + NaiveUI）— Keys 批量/管理补齐
+
+**完成内容**
+- Clients & Keys：Key 表格补齐多选、批量删除（purge）、单条测试/启用禁用/轮换/删除（purge），并保持所有操作均复用既有 `/admin/*`。
+- Key 导入：弹窗展示导入汇总（created/updated/skipped/failed）与失败明细（仅 line_no + message，不回显原始导入文本）。
+- Keys 页安全提示：接入 `GET /admin/encryption-status`，当存在不可解密 Key 时给出强提示与建议。
+- 可用性修正：连接/断开 Admin Token 后各页面自动触发数据加载/清空（避免“连接成功但页面仍空白/需手动刷新”的困惑）。
+
+**关键选择（KISS/安全默认/DRY）**
+- 批量删除不新增后端 batch endpoint：前端顺序调用 `DELETE /admin/keys/{id}/purge`；部分失败时仅汇总提示并保留失败列表在控制台（不输出明文）。
+- UI “删除”语义采用 purge（物理删除），“启用/禁用/轮换”统一走 `PUT /admin/keys/{id}`，避免与 `DELETE /admin/keys/{id}`（软禁用）语义混淆。
+- 关闭包含敏感输入的弹窗时清空文本域/结果（减少明文在页面停留时间；不持久化）。
+
+**配置说明（避免“没有配置好”）**
+- `/ui2` 仅在 `app/ui2/` 构建产物存在时挂载（`app/main.py`）。该目录在 `.gitignore` 中，因此需要本地构建：
+  - `cd webui && npm install && npm run build`
+- 运行服务后访问：`GET /ui2/`（需 `server.enable_control_plane=true`）。
+
+**本次验证结果**
+- `cd webui && npm run type-check`：通过
+- `cd webui && npm run build`：通过（产物输出到 `app/ui2/`）
+- `pytest -q`：通过
+
+### M6.4：请求日志分页（DB cursor）+ level/q 过滤 + UI2 分页视图
+
+**完成内容**
+- `/admin/logs`：增加 `level=info|warn|error` 快速筛选与 `q` 模糊搜索（`request_id/endpoint/error_message`），并在响应 items 中返回 `level` 字段。
+- `/ui2/#/logs`：前端由“无限追加”改为“真分页”（每页 20/50/100），并支持 level 过滤与关键词搜索；分页基于服务端 cursor（不在前端堆积超长列表）。
+- 契约同步：更新 `Firecrawl-API-Manager-API-Contract.md` 中 `/admin/logs` 的 query/response 字段。
+
+**关键选择（KISS/DRY）**
+- 日志 level 不落库（避免新增列与迁移），由响应按 `status_code/success` 推导（保持数据模型稳定）。
+- `q` 搜索仅覆盖最常用的三个字段（request_id/endpoint/error_message），避免做“全字段全文检索”的过度设计（YAGNI）。
+
+**本次验证结果**
+- `cd webui && npm run type-check`：通过
+- `cd webui && npm run build`：通过
+- `pytest "tests/test_admin_control_plane.py::test_admin_logs_query_pagination_and_filters"`：通过
+
+### UI2 视觉对齐 gpt-load（配色/组件/布局）
+
+**完成内容**
+- `/ui2` 主题与全局样式对齐 `example/gpt-load/web`：
+  - 新增 `webui/src/assets/variables.css`、`webui/src/assets/style.css`（复制并作为 UI2 单一风格来源）
+  - `webui/src/App.vue`：Naive UI `themeOverrides` 对齐 gpt-load；整体布局调整为“玻璃态顶栏 + 居中导航 + 内容区”
+- 适配：`webui/src/components/RequestTrendChart.vue`、`webui/src/views/LogsView.vue`、`webui/src/views/AuditView.vue` 改用 gpt-load 的 CSS 变量（移除 `--fcam-*` 依赖）。
+
+**关键选择（KISS/DRY）**
+- UI 变量命名与配色以 `example/gpt-load/web` 为准，避免多套主题并存导致维护与漂移成本上升。
+
+**本次验证结果**
+- `cd webui && npm run type-check`：通过
+- `pytest -q`：通过
+
+### 安全一致性：/v1 兼容层纳入 request_limits 白名单
+
+**完成内容**
+- `RequestLimitsMiddleware` 的路径白名单从仅 `/api/*` 扩展到同时覆盖 `/v1/*`，避免兼容层绕过 `allowed_paths` 约束。
+
+**本次验证结果**
+- `pytest -q tests/test_middleware.py`：通过
+
+### 可观测一致性：/v1 兼容层请求也写入 request_logs
+
+**完成内容**
+- `RequestIdMiddleware` 的 endpoint 推导同时覆盖 `/api/*` 与 `/v1/*`，确保兼容层的拒绝请求（例如 401/503）也会写入 `request_logs`，便于用 `/admin/logs` 排障与回放。
+- E2E：新增 `/v1/scrape` 的“无 token（401）/无 key（503）”用例，验证日志 `endpoint/level/error_message` 一致。
+- E2E（可选真实上游）：上游 smoke 用例改为走 `/v1/scrape`（更贴近 Firecrawl SDK 迁移路径）。
+
+**本次验证结果**
+- `pytest -q`：通过
+
+### T1：真实 API E2E 测试（不使用 mock 数据）
+
+**完成内容**
+- 新增 `tests/test_e2e_real_api.py`：测试用例通过 subprocess 启动 uvicorn（真实 HTTP），跑 Alembic 迁移创建空库；通过 `/admin/*` 与数据面（`/api/*`、`/v1/*`）真实调用驱动数据生成与日志落库，再验证 `/admin/logs` 的分页/level/q 行为。
+- 为避免误触外部上游请求，E2E 默认将 `firecrawl.base_url` 指向本机不可用地址；如需验证真实 Firecrawl 上游链路，建议在独立环境显式覆盖配置并提供真实 key（不写入仓库）。
+
+**运行方式**
+- `FCAM_E2E=1 && pytest "tests/test_e2e_real_api.py"`（需在项目 `.venv` 中执行）

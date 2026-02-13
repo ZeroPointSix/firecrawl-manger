@@ -28,10 +28,15 @@ def _new_request_id() -> str:
 
 
 def _infer_api_endpoint(path: str) -> str | None:
-    if not path.startswith("/api/"):
+    prefix: str | None = None
+    if path.startswith("/api/"):
+        prefix = "/api/"
+    elif path.startswith("/v1/"):
+        prefix = "/v1/"
+    else:
         return None
 
-    suffix = path[len("/api/") :].strip("/")
+    suffix = path[len(prefix) :].strip("/")
     if not suffix:
         return "unknown"
 
@@ -174,8 +179,14 @@ class RequestLimitsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
 
+        api_prefix: str | None = None
         if path.startswith("/api/"):
-            seg = path[len("/api/") :].split("/", 1)[0]
+            api_prefix = "/api/"
+        elif path.startswith("/v1/"):
+            api_prefix = "/v1/"
+
+        if api_prefix is not None:
+            seg = path[len(api_prefix) :].split("/", 1)[0]
             if seg not in self._allowed_api_paths:
                 raise FcamError(status_code=404, code="PATH_NOT_ALLOWED", message="Path not allowed")
 

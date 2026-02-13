@@ -1,6 +1,9 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["-q"]
+markers = [
+  "e2e: real HTTP end-to-end tests (opt-in via FCAM_E2E=1)",
+]
 
 [tool.ruff]
 line-length = 100
@@ -9,4 +12,3 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B"]
 ignore = ["E501"]
-
