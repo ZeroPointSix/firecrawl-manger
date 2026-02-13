@@ -2,11 +2,11 @@ services:
   fcam:
     build: .
     ports:
-      - "8000:8000"
+      # 默认只绑定本机，避免在服务器上误把控制面暴露到公网；如需对外暴露可设 FCAM_BIND_ADDR=0.0.0.0
+      - "${FCAM_BIND_ADDR:-127.0.0.1}:8000:8000"
     environment:
-      FCAM_ADMIN_TOKEN: "dev_admin_token"
-      FCAM_MASTER_KEY: "dev_master_key_32_bytes_minimum____"
+      FCAM_ADMIN_TOKEN: "${FCAM_ADMIN_TOKEN:-dev_admin_token}"
+      FCAM_MASTER_KEY: "${FCAM_MASTER_KEY:-dev_master_key_32_bytes_minimum____}"
       FCAM_CONFIG: "/app/config.yaml"
     volumes:
       - "./data:/app/data"
-

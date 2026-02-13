@@ -19,6 +19,8 @@
 ### 2.1 启动服务（Ubuntu 24.04，最小命令）
 
 > 说明：以下为“非 Docker”本地运行示例；生产部署建议参考 `docker-compose.prod.yml` 并做控制面隔离。
+>
+> 如需 Docker 部署（MVP/生产示例与数据库说明）：见 `docs/docker.md`。
 
 ```bash
 cd /path/to/firecrawl-manger
@@ -141,4 +143,3 @@ curl -sS \
 1) 先看就绪：`GET /readyz`（常见：缺少 `FCAM_ADMIN_TOKEN`/`FCAM_MASTER_KEY` 或 DB 不可用）  
 2) 接入侧每次请求带 `X-Request-Id`  
 3) 运维用 `GET /admin/logs?request_id=<id>` 精确定位一次调用（不要让接入方提供任何 token）
-
