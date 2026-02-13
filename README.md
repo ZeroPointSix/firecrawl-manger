@@ -7,6 +7,7 @@ FCAM 是一个可容器化部署的轻量级 HTTP 网关，用于集中管理多
 - 技术方案/语义/失败策略/开发规则：`agent.md`
 - API 接口契约（请求/响应/错误体/分页/示例）：`Firecrawl-API-Manager-API-Contract.md`
 - API 使用指南（面向调用方/运维，上手/配置/示例）：`API-Usage.md`
+- 接入方/运维快速手册（接口一览 + 部署要点）：`docs/handbook.md`
 - 实施代办清单（里程碑顺序）：`TD.md`（`TODO.md` 仅兼容入口）
 - 产品需求：`Firecrawl-API-Manager-PRD.md`
 
