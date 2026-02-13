@@ -27,3 +27,6 @@ data/
 logs/
 example/
 app/ui2/
+
+# Windows reserved-name artifact that breaks some tools (e.g. ripgrep).
+nul
