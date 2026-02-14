@@ -329,3 +329,44 @@
 
 **运行方式**
 - `FCAM_E2E=1 && pytest "tests/test_e2e_real_api.py"`（需在项目 `.venv` 中执行）
+
+## 2026-02-13（UTC）
+
+### Docs：新增接入手册入口 + Docker 部署指南
+
+**完成内容**
+- 新增 `docs/handbook.md`：接入方/运维快速手册（接口一览、最短接入路径、排障姿势），并在 `README.md` 增加入口。
+- 新增 `docs/docker.md`：解释 MVP（SQLite）与生产（Postgres + Redis）部署差异、持久化位置与最小启动命令；在 `docs/handbook.md`/`README.md` 增加链接入口。
+- `docker-compose.yml`：dev 默认只绑定 `127.0.0.1:8000`（可通过 `FCAM_BIND_ADDR=0.0.0.0` 显式对外暴露）；并将敏感 env 改为环境变量注入（保留 dev 默认值）。
+
+**关键选择（KISS/DRY/安全默认）**
+- 文档分层：字段/分页/错误体仍以 `Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；handbook 只做“索引 + 最小可用链路”，避免重复维护漂移（DRY）。
+- Docker(dev) 默认端口绑定改为 `127.0.0.1`，降低“把控制面（`/admin/*`）与数据面一起暴露到公网”的误配置风险（安全默认）。
+
+**本次验证结果**
+- `cd webui && npm run type-check`：通过
+- `cd webui && npm run build`：通过（产物更新到 `app/ui2/`；chunk size 警告不影响运行）
+- `pytest -q`：通过（含 7 skipped；仅告警无失败）
+
+### UI2：审计日志改为“真分页”
+
+**完成内容**
+- `/ui2/#/audit`：由“加载更多（append）”改为“真分页”（上一页/下一页 + 20/50/100 每页），分页基于服务端 cursor（不在前端堆积超长列表）。
+
+**关键选择（KISS/一致性）**
+- 复用 `/ui2/#/logs` 已验证的分页状态机（pages + cursors + hasMoreByPage），保持交互一致并降低维护成本。
+
+**本次验证结果**
+- `cd webui && npm run type-check`：通过
+
+### Repo hygiene：忽略 Windows `nul` 伪文件 + UI2 快照
+
+**完成内容**
+- `.gitignore` 增加 `nul`：避免该保留名伪文件导致工具链异常（例如 ripgrep 报错）。
+- 新增 `ui2-dashboard*.png`：用于视觉对齐与回归对比，不参与运行时逻辑。
+
+**关联提交**
+- `41c41a6 docs: add FCAM handbook`
+- `d27b769 chore: ignore nul and add ui2 dashboard snapshots`
+- `bd82a74 feat(webui): paginate audit logs`
+- `e1bcb95 docs: add docker deployment guide`
