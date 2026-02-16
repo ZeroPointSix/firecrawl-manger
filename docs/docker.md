@@ -1,7 +1,7 @@
 # Docker 部署（MVP / 生产建议）
 
 > 本文关注“怎么跑起来 + 数据库是什么 + 怎么持久化”。  
-> 更完整的接口语义与错误体：`Firecrawl-API-Manager-API-Contract.md`。
+> 更完整的接口语义与错误体：`docs/MVP/Firecrawl-API-Manager-API-Contract.md`。
 
 ## 0. 数据库现在用什么？
 
@@ -56,7 +56,7 @@ curl -sS "http://127.0.0.1:8000/readyz"
 ### 1.3 安全提醒（非常重要）
 
 `docker-compose.yml` 的 MVP 形态是“数据面 + 控制面同端口”，如果你把 `8000` 暴露到公网，`/admin/*` 也会暴露。  
-生产请用 `docker-compose.prod.yml` 做端口/网段隔离。
+生产请用 `docker compose` 的 `prod` profile 做端口/网段隔离（见下方命令）。
 
 ---
 
@@ -66,10 +66,10 @@ curl -sS "http://127.0.0.1:8000/readyz"
 
 启动：
 ```bash
-docker compose -f "docker-compose.prod.yml" up --build
+docker compose --profile prod up --build postgres redis fcam_api fcam_admin
 ```
 
-默认端口约定（见 `docker-compose.prod.yml`）：
+默认端口约定（`prod` profile）：
 - 数据面：`0.0.0.0:8000`（对外）
 - 控制面：`127.0.0.1:8001`（仅本机回环；建议再叠加 VPN/零信任）
 

@@ -1,6 +1,6 @@
 # FCAM API 使用指南（面向调用方/运维）
 
-> 本文是“如何使用 FCAM”的上手手册；完整接口契约（字段/分页/错误体）以 `Firecrawl-API-Manager-API-Contract.md` 为准。
+> 本文是“如何使用 FCAM”的上手手册；完整接口契约（字段/分页/错误体）以 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 为准。
 
 ## 0. 你需要理解的三个概念
 
@@ -39,7 +39,7 @@ $env:FCAM_MASTER_KEY="dev_master_key_32_bytes_minimum____"
 ```
 
 浏览器入口：
-- `GET /ui/`：内置 WebUI（可用于发 Key、发 Client Token、看日志）
+- `GET /ui2/`：WebUI（可用于发 Key、发 Client Token、看日志；`/ui/` 会 307 跳转到 `/ui2/`）
 - `GET /docs`：Swagger（若启用）
 
 ### 1.2 `config.yaml` 与环境变量覆盖（推荐）
@@ -56,7 +56,7 @@ $env:FCAM_FIRECRAWL__MAX_RETRIES="3"
 ```
 
 生产建议（强烈）：
-- 将数据面与控制面 **端口隔离/网段隔离**（详见 `docker-compose.prod.yml` 示例）。
+- 将数据面与控制面 **端口隔离/网段隔离**（详见 `docker-compose.yml` 的 `prod` profile 示例）。
 
 ---
 
@@ -216,7 +216,7 @@ pytest -q tests/test_api_data_plane.py
 
 ### 5.2 UI 内的“数据面自检（/api/scrape）”（端到端但不自动保存 Client Token）
 
-访问 `GET /ui/` → Dashboard → “数据面自检（/api/scrape）”。
+访问 `GET /ui2/` → Dashboard → “数据面自检（/api/scrape）”。
 
 ### 5.3 真实联调（会真实请求 Firecrawl）
 
@@ -268,7 +268,7 @@ FCAM_E2E_SCRAPE_URL=https://example.com
 变化：
 - 你不再把 Firecrawl API Key 配到业务服务里；业务服务只持有 **Client Token**
 - 请求目标从 `https://api.firecrawl.dev/v1/*` 变成 `http(s)://<FCAM_HOST>/v1/*`（或直接 `/api/*`）
-- 可能会遇到 FCAM 自身的治理错误（限流/并发/配额/无 key 等），错误体见 `Firecrawl-API-Manager-API-Contract.md`
+- 可能会遇到 FCAM 自身的治理错误（限流/并发/配额/无 key 等），错误体见 `docs/MVP/Firecrawl-API-Manager-API-Contract.md`
 
 ### 6.2 最小改动迁移（强烈推荐）
 

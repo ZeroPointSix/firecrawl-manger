@@ -1,6 +1,6 @@
 # Firecrawl API Manager 接口契约（MVP）
 
-> 对齐文档：`Firecrawl-API-Manager-PRD.md:343`（核心端点清单）  
+> 对齐文档：`docs/MVP/Firecrawl-API-Manager-PRD.md:343`（核心端点清单）  
 > 目标：让前后端/调用方在不读代码的情况下，能明确“怎么调、会返回什么、失败怎么处理、如何分页过滤”。
 
 ## 1. 通用约定

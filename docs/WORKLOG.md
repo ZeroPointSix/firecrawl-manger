@@ -19,7 +19,7 @@
 - Docker(dev)：`Dockerfile` + `docker-compose.yml` + `scripts/entrypoint.sh`
 
 **关键选择（KISS/DRY/SOLID）**
-- 先按 `TD.md` 的 M1 做“可运行骨架”，把可测/可观测/可迁移的边界先搭起来，再进入 M2/M3 的业务链路。
+- 先按 `docs/project/TD.md` 的 M1 做“可运行骨架”，把可测/可观测/可迁移的边界先搭起来，再进入 M2/M3 的业务链路。
 - 日志脱敏采用“字段名脱敏 + 文本模式脱敏”两层，避免遗漏（但不写入任何明文机密）。
 
 **当前阻塞**
@@ -37,7 +37,7 @@
 
 **完成内容**
 - request_logs：在 `RequestIdMiddleware` 中为每个 `/api/*` 请求落 1 条 `request_logs`（成功/拒绝/上游透传/超时均覆盖）
-- request_logs 字段：新增 `retry_count`（对应契约与 `agent.md` 13.4/8.1 建议字段）
+- request_logs 字段：新增 `retry_count`（对应契约与 `docs/agent.md` 13.4/8.1 建议字段）
 - /api 集成测试：为每个数据面端点补齐 200/429/5xx/timeout 的 mock Firecrawl 用例；并增加 request_logs “恰好 1 条”与 `retry_count` 断言
 
 **关键选择（KISS/DRY/SOLID）**
@@ -96,7 +96,7 @@
 - 保留策略：新增 `app/db/cleanup.py` + `scripts/cleanup.py`，支持 request_logs/audit_logs/idempotency_records 清理
 - 配置：新增 `observability.*`（metrics + retention）并更新 `config.yaml`
 - 测试：新增 metrics/cleanup 用例，并补齐幂等 TTL、all cooling、failure mode、client quota 惰性重置等回归
-- 文档：更新 `agent.md`、`Firecrawl-API-Manager-API-Contract.md`、`README.md`、`TD.md`
+- 文档：更新 `docs/agent.md`、`docs/MVP/Firecrawl-API-Manager-API-Contract.md`、`README.md`、`docs/project/TD.md`
 
 **关键选择（KISS/DRY/SOLID）**
 - 选择 Prometheus 官方 `prometheus-client`，避免手写 exposition 格式与线程安全问题。
@@ -119,11 +119,11 @@
 - 容器化（生产示例）：
   - `Dockerfile`：非 root 用户运行 + 仅安装生产依赖
   - `scripts/entrypoint.sh`：uvicorn host/port 读取 `FCAM_SERVER__HOST/PORT`
-  - `docker-compose.prod.yml`：Postgres + Redis + 两实例示例（api/admin 端口隔离）
-- 文档与示例：更新 `README.md`、`agent.md`、`.env.example`、`TD.md`
+  - `docker-compose.yml`（`prod` profile）：Postgres + Redis + 两实例示例（api/admin 端口隔离）
+- 文档与示例：更新 `README.md`、`docs/agent.md`、`.env.example`、`docs/project/TD.md`
 
 **关键选择（KISS/DRY/SOLID）**
-- 选择 Redis 作为“并发/限流/冷却”的分布式权威（与 `agent.md` 15.2 推荐一致），避免 DB 行锁实现复杂度。
+- 选择 Redis 作为“并发/限流/冷却”的分布式权威（与 `docs/agent.md` 15.2 推荐一致），避免 DB 行锁实现复杂度。
 - 端口隔离通过“同一代码、不同部署开关”实现（不引入双进程/反向代理强依赖），保持部署简单可控。
 
 **本次验证结果**
@@ -146,10 +146,10 @@
 - `GET http://127.0.0.1:8000/healthz` → 200 `{"ok": true}`
 - `GET http://127.0.0.1:8000/readyz` → 200 `{"ok": true}`
 
-### M6（可选）：最小内置 WebUI（/ui）
+### M6（可选）：最小内置 WebUI（/ui2）
 
 **完成内容**
-- 新增内置静态页面：`GET /ui/`（仅当 `server.enable_control_plane=true` 时挂载）
+- 新增内置静态页面：`GET /ui2/`（仅当 `server.enable_control_plane=true` 时挂载；`/ui/` 仅保留跳转）
 - WebUI 复用既有 `/admin/*` 控制面能力：Key/Client 的创建/更新/启用禁用/软禁用、Key test、Client rotate、`/admin/stats` 查看
 - Admin Token 由用户在页面输入，仅保存在浏览器内存中（刷新即丢失）
 
@@ -165,19 +165,19 @@
 ### M6.1：WebUI 视觉重构（Dashboard 风格）
 
 **完成内容**
-- UI 重构为本地静态资源：`app/ui/index.html` + `app/ui/app.css` + `app/ui/app.js`
+- UI 重构为 Vue 构建产物：`app/ui2/index.html` + `app/ui2/assets/*`
 - 交互形态：侧边栏多标签（dashboard/keys/clients/logs/audit/help）+ 主区分屏（列表/详情）
 - 运维可视化补齐：在 UI 内直接查询 `request_logs`（`/admin/logs`）与 `audit_logs`（`/admin/audit-logs`）
 - 连接校验复用 `/admin/stats`：验证成功后同时回填 Dashboard 输出，避免“连接成功但概览仍未加载”的困惑
 - 修正视图切换隐藏逻辑：仅切换 `.view[data-view]` 区块，不影响侧边栏导航常驻
-- 旧版 UI 快照保留：`app/ui.v1.html`（不再由 `/ui/` 提供，仅用于对照/回滚）
+- 旧版 UI 已废除（不再保留快照文件）
 
 **关键选择（KISS/安全默认）**
 - 不依赖 CDN 与构建工具（NPM/bundle），避免内网/离线环境下 UI 失效；同时减少供应链暴露面。
 - 仍坚持“不新增 UI 专用后端 API”，所有操作都复用既有 `/admin/*`（保持契约单一事实来源）。
 
 **本次验证结果**
-- `pytest "tests/test_ui.py"`：通过（含 `/ui/app.css`、`/ui/app.js` 可访问断言）
+- `pytest "tests/test_ui2.py"`：通过（含 `/ui/` → 307 跳转断言）
 
 ### M6.2：WebUI 导航布局调整（顶部横向 Tabs）
 
@@ -232,16 +232,16 @@
 **验证结果**
 - `GET /healthz` → 200
 - `GET /readyz` → 200
-- `GET /ui/` → 200（HTML）
+- `GET /ui2/` → 200（HTML）
 - `GET /docs` → 200（HTML）
 
 ### API 使用指南（面向调用方/运维）
 
 **完成内容**
-- 新增 `API-Usage.md`：涵盖启动/配置、Key 池管理、Client Token 发放、`/api/*` 调用（scrape/crawl/agent）与测试路径。
+- 新增 `docs/API-Usage.md`：涵盖启动/配置、Key 池管理、Client Token 发放、`/api/*` 调用（scrape/crawl/agent）与测试路径。
 
 **关键选择（KISS/DRY）**
-- “字段/错误体/分页”等契约细节仍以 `Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；`API-Usage.md` 只聚焦上手与调用姿势，避免文档漂移。
+- “字段/错误体/分页”等契约细节仍以 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；`docs/API-Usage.md` 只聚焦上手与调用姿势，避免文档漂移。
 
 **本次验证结果**
 - `pytest -q tests/test_api_data_plane.py::test_api_endpoints_forward_to_expected_upstream ...`：通过（MockTransport 模拟上游，覆盖 scrape/crawl/agent 转发路径与幂等行为）
@@ -277,7 +277,7 @@
 **完成内容**
 - `/admin/logs`：增加 `level=info|warn|error` 快速筛选与 `q` 模糊搜索（`request_id/endpoint/error_message`），并在响应 items 中返回 `level` 字段。
 - `/ui2/#/logs`：前端由“无限追加”改为“真分页”（每页 20/50/100），并支持 level 过滤与关键词搜索；分页基于服务端 cursor（不在前端堆积超长列表）。
-- 契约同步：更新 `Firecrawl-API-Manager-API-Contract.md` 中 `/admin/logs` 的 query/response 字段。
+- 契约同步：更新 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 中 `/admin/logs` 的 query/response 字段。
 
 **关键选择（KISS/DRY）**
 - 日志 level 不落库（避免新增列与迁移），由响应按 `status_code/success` 推导（保持数据模型稳定）。
@@ -340,7 +340,9 @@
 - `docker-compose.yml`：dev 默认只绑定 `127.0.0.1:8000`（可通过 `FCAM_BIND_ADDR=0.0.0.0` 显式对外暴露）；并将敏感 env 改为环境变量注入（保留 dev 默认值）。
 
 **关键选择（KISS/DRY/安全默认）**
-- 文档分层：字段/分页/错误体仍以 `Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；handbook 只做“索引 + 最小可用链路”，避免重复维护漂移（DRY）。
+- 文档分层：字段/分页/错误体仍以 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；handbook 只做“索引 + 最小可用链路”，避免重复维护漂移（DRY）。
+
+- 2026-02-15：废除旧 `/ui`（零构建 UI），默认使用 Vue WebUI：`GET /ui2/`；`/ui/` 保留为 307 跳转；镜像构建阶段内置构建 UI2。
 - Docker(dev) 默认端口绑定改为 `127.0.0.1`，降低“把控制面（`/admin/*`）与数据面一起暴露到公网”的误配置风险（安全默认）。
 
 **本次验证结果**
@@ -363,7 +365,7 @@
 
 **完成内容**
 - `.gitignore` 增加 `nul`：避免该保留名伪文件导致工具链异常（例如 ripgrep 报错）。
-- 新增 `ui2-dashboard*.png`：用于视觉对齐与回归对比，不参与运行时逻辑。
+- 新增 `docs/assets/ui2/ui2-dashboard*.png`：用于视觉对齐与回归对比，不参与运行时逻辑。
 
 **关联提交**
 - `41c41a6 docs: add FCAM handbook`

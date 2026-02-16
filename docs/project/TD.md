@@ -1,10 +1,10 @@
 # TD（实施代办清单 / Task List）
 
-> 适用范围：按 `Firecrawl-API-Manager-PRD.md` + `agent.md` + `Firecrawl-API-Manager-API-Contract.md` 落地实现。  
+> 适用范围：按 `docs/MVP/Firecrawl-API-Manager-PRD.md` + `docs/agent.md` + `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 落地实现。  
 > 使用方式：从上到下执行；每完成一项就打勾；任何“语义/接口”变更必须同步更新对应文档。
 
 ## 0. 全局规则（强制）
-- **文档优先**：接口/语义/失败码/状态机调整，必须先改文档（`agent.md`、`Firecrawl-API-Manager-API-Contract.md`），再改代码。
+- **文档优先**：接口/语义/失败码/状态机调整，必须先改文档（`docs/agent.md`、`docs/MVP/Firecrawl-API-Manager-API-Contract.md`），再改代码。
 - **日志优先**：所有“可能出问题”的分支都要有结构化日志（但必须脱敏，不得泄露 token/api_key）。
 - **测试优先**：新增/修改的业务逻辑必须补测试；覆盖率 **≥ 80%**；并且**每个函数/每个类至少有 1 个测试用例覆盖**（以 `app/` 业务代码为准）。
 
@@ -15,7 +15,7 @@
 - **M3（控制面闭环）**：/admin CRUD + stats/quota + logs 查询 + 审计
 - **M4（可观测与质量门禁）**：指标/日志/清理策略/覆盖率门禁/回归矩阵
 - **M5（生产形态）**：Postgres +（可选）Redis + 多实例一致性方案 + 部署示例
-- **M6（可选：最小 WebUI）**：提供内置 `/ui`，用于最小化操作成本（调用现有 `/admin/*`）
+- **M6（可选：最小 WebUI）**：提供内置 `/ui2`，用于最小化操作成本（调用现有 `/admin/*`）
 
 每个里程碑的“完成标准（DoD）”统一要求：
 - 对应功能的自动化测试齐全（见 0. 全局规则 + 各阶段测试矩阵）
@@ -25,17 +25,17 @@
 ---
 
 ## 2. M0：文档冻结（先做）
-- [x] 已冻结 `quota.timezone=UTC`（与 Firecrawl 账期口径对齐；如需本地日历可改为 Asia/Shanghai），并在 `agent.md` 与接口契约中一致
-- [x] 已冻结 `quota.count_mode=success`（成功计数），并在 `agent.md` 与接口契约中一致
+- [x] 已冻结 `quota.timezone=UTC`（与 Firecrawl 账期口径对齐；如需本地日历可改为 Asia/Shanghai），并在 `docs/agent.md` 与接口契约中一致
+- [x] 已冻结 `quota.count_mode=success`（成功计数），并在 `docs/agent.md` 与接口契约中一致
 - [x] 已冻结 `/api/*` 的“上游错误透传 vs 网关包装”策略（默认透传，上游错误不包装）
-- [x] 已冻结失败码表（`agent.md` 第 14 节）与错误体字段（`Firecrawl-API-Manager-API-Contract.md`）
-- [x] 已冻结 Key 状态机迁移规则（`agent.md` 第 16 节），包括 401/403 自动 disabled、5xx/timeout 失败退避（阈值/窗口可配置）
+- [x] 已冻结失败码表（`docs/agent.md` 第 14 节）与错误体字段（`docs/MVP/Firecrawl-API-Manager-API-Contract.md`）
+- [x] 已冻结 Key 状态机迁移规则（`docs/agent.md` 第 16 节），包括 401/403 自动 disabled、5xx/timeout 失败退避（阈值/窗口可配置）
 - [x] 已冻结“实现模式选择”：
   - [x] MVP：SQLite 单实例/单进程（并发 lease 在内存）
   - [x] 生产：Postgres +（可选）Redis（一致性实现二选一：Redis 原子计数优先；或 DB 行锁）
 
 M0 DoD（完成标志）：
-- [x] `agent.md` / `Firecrawl-API-Manager-API-Contract.md` / `TD.md` 内容自洽，且关键默认值已在文档中明确可查
+- [x] `docs/agent.md` / `docs/MVP/Firecrawl-API-Manager-API-Contract.md` / `docs/project/TD.md` 内容自洽，且关键默认值已在文档中明确可查
 
 ---
 
@@ -48,7 +48,7 @@ M0 DoD（完成标志）：
 - [x] 统一日志：JSON/结构化日志格式、request_id 注入、脱敏过滤器
 
 ### 3.2 配置系统
-- [x] 配置加载：默认值 → `config.yaml` → env 覆盖（在 `agent.md` 第 17.2 约定）
+- [x] 配置加载：默认值 → `config.yaml` → env 覆盖（在 `docs/agent.md` 第 17.2 约定）
 - [x] 机密注入：`FCAM_ADMIN_TOKEN`、`FCAM_MASTER_KEY`（仅 env/secret）
 - [x] 配置校验：启动时校验必需配置缺失则 fail-fast（并在 `/readyz` 反映）
 
@@ -78,13 +78,13 @@ M1 DoD（完成标志）：
 
 ### 4.2 Key Pool（选择/并发/冷却/配额）
 - [x] Round-robin + 配额感知选择（跳过 disabled/cooling/quota_exceeded/failed）
-- [x] Key 并发 lease（MVP 内存 semaphore；状态权威说明见 `agent.md` 第 15.1）
+- [x] Key 并发 lease（MVP 内存 semaphore；状态权威说明见 `docs/agent.md` 第 15.1）
 - [x] 429 冷却：尊重 `Retry-After`，否则默认 cooldown 秒数
 - [x] Key 配额（daily_quota/daily_usage）更新与惰性重置
 - [x] 失败退避：网络超时/5xx 达阈值转 failed，并可自动恢复窗口
 
 ### 4.3 转发器（Forwarder）
-- [x] 端点映射实现（与 `Firecrawl-API-Manager-API-Contract.md` 的 URL 示例一致）
+- [x] 端点映射实现（与 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 的 URL 示例一致）
 - [x] 覆盖/丢弃不可信 header（`Authorization`/`Host`/`X-Forwarded-*` 等按策略）
 - [x] 超时、重试、切 key 策略（只重试可重试错误；对 4xx 不重试）
 - [x] 为每次入站请求产出 1 条 request_log（记录 retry_count 等）
@@ -143,8 +143,8 @@ M3 DoD（完成标志）：
 ## 6. M4：可观测、清理策略与测试体系
 ### 6.1 可观测
 - [x] 结构化日志字段规范（最少包含 request_id/client_id/endpoint/status_code/latency_ms）
-- [x] 日志脱敏清单落地（见 `agent.md` 第 17.3），并加单测验证“不会输出明文 token/api_key”
-- [x] 指标（/metrics）：请求数、耗时、key 冷却次数、配额剩余等（见 `agent.md` 第 8 章）
+- [x] 日志脱敏清单落地（见 `docs/agent.md` 第 17.3），并加单测验证“不会输出明文 token/api_key”
+- [x] 指标（/metrics）：请求数、耗时、key 冷却次数、配额剩余等（见 `docs/agent.md` 第 8 章）
 
 ### 6.2 TTL/保留策略
 - [x] request_logs 清理（保留 N 天）
@@ -183,11 +183,10 @@ M5 DoD（完成标志）：
 
 ---
 
-## 8. M6（可选）：最小内置 WebUI（/ui）
-- [x] 仅在 `server.enable_control_plane=true` 时挂载 `/ui`（静态页面）
+## 8. M6（可选）：内置 WebUI（/ui2）
+- [x] 仅在 `server.enable_control_plane=true` 时挂载 `/ui2`（静态页面）
 - [x] WebUI 只做“最小可用”的 Key/Client 管理（复用现有 `/admin/*`），不新增后端业务语义
-- [x] UI 形态：顶部横向 Tabs + 主区分屏（列表/详情）；支持 Logs/Audit 只读查询（复用 `/admin/logs`、`/admin/audit-logs`）
+- [x] UI 形态：Vue（构建产物托管到 `app/ui2/`）；服务端挂载 `GET /ui2/`；`/ui/` 仅保留为 307 跳转
 - [x] Admin Token 支持同标签页/本机持久化（可配置过期）并提供一键清空；默认同标签页保存以减少重复输入
-- [x] 静态资源本地化：`app/ui/index.html` + `app/ui/app.css` + `app/ui/app.js`（不依赖 CDN/构建工具）
-- [x] 测试：控制面开启时 `/ui/` 返回 HTML 且静态资源可访问；控制面关闭时 `/ui/` 返回 404
-- [x] 文档：`README.md` 增加 `/ui/` 入口说明；`WORKLOG.md` 记录选择与验证结果
+- [x] 测试：控制面开启时 `/ui2/` 返回 HTML；控制面关闭时 `/ui2/` 返回 404；`/ui/` 跳转到 `/ui2/`
+- [x] 文档：`README.md` 增加 `/ui2/` 入口说明；`docs/WORKLOG.md` 记录选择与验证结果

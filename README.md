@@ -4,13 +4,13 @@ FCAM 是一个可容器化部署的轻量级 HTTP 网关，用于集中管理多
 
 ## 单一事实来源（先读文档）
 
-- 技术方案/语义/失败策略/开发规则：`agent.md`
-- API 接口契约（请求/响应/错误体/分页/示例）：`Firecrawl-API-Manager-API-Contract.md`
-- API 使用指南（面向调用方/运维，上手/配置/示例）：`API-Usage.md`
+- 技术方案/语义/失败策略/开发规则：`docs/agent.md`
+- API 接口契约（请求/响应/错误体/分页/示例）：`docs/MVP/Firecrawl-API-Manager-API-Contract.md`
+- API 使用指南（面向调用方/运维，上手/配置/示例）：`docs/API-Usage.md`
 - 接入方/运维快速手册（接口一览 + 部署要点）：`docs/handbook.md`
 - Docker 部署（MVP/生产示例 + 数据库说明）：`docs/docker.md`
-- 实施代办清单（里程碑顺序）：`TD.md`（`TODO.md` 仅兼容入口）
-- 产品需求：`Firecrawl-API-Manager-PRD.md`
+- 实施代办清单（里程碑顺序）：`docs/project/TD.md`（`docs/project/TODO.md` 仅兼容入口）
+- 产品需求：`docs/MVP/Firecrawl-API-Manager-PRD.md`
 
 ## 本地开发（不使用 Docker）
 
@@ -28,8 +28,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "scripts/bootstrap-python.ps
 
 浏览器入口：
 - Swagger：`GET /docs`（`server.enable_docs=true`）
-- 内置 WebUI：`GET /ui/`（`server.enable_control_plane=true`；顶部横向标签：概览/Keys/Clients/Logs/Audit/帮助；Admin Token 可配置持久化/过期；Dashboard 提供 `/api/scrape` 端到端自检）
-- WebUI v2（Vue）：`GET /ui2/`（需先在 `webui/` 执行 `npm install` + `npm run build` 生成 `app/ui2/`；该目录在 `.gitignore` 中，仅本地/发布构建时存在）
+- WebUI（Vue/UI2）：`GET /ui2/`（需先在 `webui/` 执行 `npm ci` + `npm run build` 生成 `app/ui2/`；该目录在 `.gitignore` 中，仅本地/发布构建时存在；`/ui/` 会 307 跳转到 `/ui2/`）
 
 ### 通用（已安装 Python）
 
@@ -74,7 +73,7 @@ FCAM_E2E_SCRAPE_URL=https://example.com
 
 ## 实施日志
 
-- 变更/选择/阻塞记录：`WORKLOG.md`
+- 变更/选择/阻塞记录：`docs/WORKLOG.md`
 
 ## Docker（dev）
 
@@ -101,10 +100,10 @@ docker compose up --build
 含义：你在调用 `/admin/*` 时，**没有携带** `Authorization: Bearer <admin_token>`，或携带的 token 与服务端启动时读取到的 `FCAM_ADMIN_TOKEN` **不一致**。
 
 常见原因：
-- 你在 Swagger（`/docs`）里直接点 `Try it out` 调 `/admin/*`：Swagger 默认不会自动加 `Authorization` 头，因此会 401（推荐改用 `/ui/` 或命令行请求）。
+- 你在 Swagger（`/docs`）里直接点 `Try it out` 调 `/admin/*`：Swagger 默认不会自动加 `Authorization` 头，因此会 401（推荐改用 `/ui2/` 或命令行请求）。
 - 你访问的是“另一个端口/另一个进程”的实例（例如本机 `8000/8001` 已被占用），该实例的 `FCAM_ADMIN_TOKEN` 与你输入的不一致。
 - 你在某个 PowerShell 窗口里设置了 `$env:FCAM_ADMIN_TOKEN=...`，但 uvicorn 是在**另一个窗口**启动的（环境变量只对当前进程/子进程生效）。
-- `/ui/` 如选择“仅本次（内存）”或 token 已过期/被清空，需要重新输入并点击“保存”。
+- `/ui2/` 如选择“仅本次（内存）”或 token 已过期/被清空，需要重新输入并点击“保存”。
 
 自检（PowerShell 示例，注意不要在工单/群里粘贴明文 token）：
 ```powershell
@@ -114,12 +113,16 @@ Invoke-RestMethod -Method GET -Uri "http://127.0.0.1:8000/admin/keys" -Headers $
 
 ## Docker（prod 示例：Postgres + Redis + 端口隔离）
 
-生产示例 compose：`docker-compose.prod.yml`
+```bash
+docker compose --profile prod up --build postgres redis fcam_api fcam_admin
+```
 
 - 数据面（/api）：对外暴露 `:8000`（`server.enable_control_plane=false`）
 - 控制面（/admin）：仅绑定 `127.0.0.1:8001`（`server.enable_data_plane=false`）
 - 多实例一致性：`state.mode=redis`（并发/限流/冷却）
 
+## Docker（public：仅数据面）
+
 ```bash
-docker compose -f docker-compose.prod.yml up --build
+docker compose --profile public up --build fcam_public
 ```

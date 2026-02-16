@@ -1,8 +1,8 @@
 # FCAM 使用与接口手册（给接入方/运维）
 
 > 目标：让“另一个服务”在不读代码的情况下，完成 **部署、发放 Token、调用 /api 或 /v1 兼容层、排障**。  
-> **接口字段/分页/错误体的单一事实来源**：`Firecrawl-API-Manager-API-Contract.md`。  
-> **上手与迁移指南（更完整示例）**：`API-Usage.md`。
+> **接口字段/分页/错误体的单一事实来源**：`docs/MVP/Firecrawl-API-Manager-API-Contract.md`。  
+> **上手与迁移指南（更完整示例）**：`docs/API-Usage.md`。
 
 ## 1. 你接入 FCAM 需要知道的三件事
 
@@ -18,7 +18,7 @@
 
 ### 2.1 启动服务（Ubuntu 24.04，最小命令）
 
-> 说明：以下为“非 Docker”本地运行示例；生产部署建议参考 `docker-compose.prod.yml` 并做控制面隔离。
+> 说明：以下为“非 Docker”本地运行示例；生产部署建议参考 `docker-compose.yml` 的 `prod` profile 并做控制面隔离。
 >
 > 如需 Docker 部署（MVP/生产示例与数据库说明）：见 `docs/docker.md`。
 
@@ -48,7 +48,7 @@ curl -sS "http://127.0.0.1:8000/readyz"
 2)（可选）测试 Key 真实可用：`POST /admin/keys/{id}/test`（会真实请求上游）  
 3) 创建 client 并拿到 token：`POST /admin/clients`（token **只返回一次**）
 
-PowerShell 示例见：`API-Usage.md`。
+PowerShell 示例见：`docs/API-Usage.md`。
 
 ### 2.3 业务调用（数据面：/v1 兼容层优先）
 
@@ -78,7 +78,7 @@ curl -sS \
 
 ## 3. 接口一览（按职责划分）
 
-> 详细请求/响应/错误体/分页过滤见：`Firecrawl-API-Manager-API-Contract.md`。
+> 详细请求/响应/错误体/分页过滤见：`docs/MVP/Firecrawl-API-Manager-API-Contract.md`。
 
 ### 3.1 探活 / 指标
 
@@ -131,7 +131,7 @@ curl -sS \
 
 ## 5. 部署建议（生产最小安全边界）
 
-1) **控制面与数据面隔离**：生产推荐按 `docker-compose.prod.yml` 分端口/分网段暴露。  
+1) **控制面与数据面隔离**：生产推荐按 `docker-compose.yml` 的 `prod` profile 分端口/分网段暴露。  
 2) **关闭 Swagger**：生产建议 `server.enable_docs=false`。  
 3) **限制可转发路径与 body 大小**：见 `config.yaml: security.request_limits`。  
 4) **限制公网暴露**：如必须公网暴露数据面，建议前置反向代理/WAF + IP allowlist + TLS/mTLS。

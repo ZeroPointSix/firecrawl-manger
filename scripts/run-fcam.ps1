@@ -15,6 +15,9 @@ param(
   [switch]$EnableDocs,
 
   [Parameter(Mandatory = $false)]
+  [switch]$SkipUiBuild,
+
+  [Parameter(Mandatory = $false)]
   [switch]$SkipMigrations
 )
 
@@ -88,6 +91,29 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
 
 if (-not $SkipMigrations) {
   & $PythonExe -m alembic upgrade head
+}
+
+if ($EnableControlPlane -and -not $SkipUiBuild) {
+  $Ui2Index = Join-Path $RepoRoot "app\\ui2\\index.html"
+  if (-not (Test-Path -LiteralPath $Ui2Index)) {
+    $npm = Get-Command npm -ErrorAction SilentlyContinue
+    if (-not $npm) {
+      Write-Warning "UI2 未构建且未找到 npm：将只提供 /ui2/ 占位页（可手动在 webui/ 执行 npm ci && npm run build）"
+    } else {
+      $WebuiDir = Join-Path $RepoRoot "webui"
+      if (Test-Path -LiteralPath $WebuiDir) {
+        Push-Location -LiteralPath $WebuiDir
+        try {
+          if (-not (Test-Path -LiteralPath (Join-Path $WebuiDir "node_modules"))) {
+            & npm ci
+          }
+          & npm run build
+        } finally {
+          Pop-Location
+        }
+      }
+    }
+  }
 }
 
 & $PythonExe -m uvicorn "app.main:app" --host $BindHost --port $Port

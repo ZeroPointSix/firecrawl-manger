@@ -249,7 +249,7 @@
 - [ ] 增加 `/admin/dashboard/stats`
 - [ ] 增加 `/admin/dashboard/chart`
 - [ ] 增加 `/admin/encryption-status`
-- [ ] 更新 `Firecrawl-API-Manager-API-Contract.md`
+- [ ] 更新 `docs/MVP/Firecrawl-API-Manager-API-Contract.md`
 
 ### Phase 2：UI 骨架重构（1 天）
 - [ ] 提炼 UI state/store（避免散落全局状态）

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import HTMLResponse, RedirectResponse
 
 from app.api.health import router as health_router
 from app.api.control_plane import router as control_plane_router
@@ -125,12 +126,41 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
         app.include_router(firecrawl_compat_router)
     if config.server.enable_control_plane:
         app.include_router(control_plane_router)
-        ui_dir = Path(__file__).resolve().parent / "ui"
-        app.mount("/ui", StaticFiles(directory=str(ui_dir), html=True), name="ui")
-
         ui2_dir = Path(__file__).resolve().parent / "ui2"
         if ui2_dir.exists():
             app.mount("/ui2", StaticFiles(directory=str(ui2_dir), html=True), name="ui2")
+        else:
+            logger.warning("ui2.static_dir_missing", extra={"fields": {"path": str(ui2_dir)}})
+
+            @app.get("/ui2/", include_in_schema=False)
+            def ui2_placeholder() -> HTMLResponse:
+                html = """<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>FCAM WebUI</title>
+  </head>
+  <body style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 24px;">
+    <h1 style="margin: 0 0 8px 0;">FCAM WebUI（UI2）</h1>
+    <p style="margin: 0 0 16px 0; color: #444;">
+      UI2 静态文件尚未构建（目录不存在）。请在仓库根目录执行：
+    </p>
+    <pre style="background:#f6f8fa; padding:12px; border-radius:8px; overflow:auto;">cd webui
+npm ci
+npm run build</pre>
+    <p style="margin: 16px 0 0 0; color: #444;">构建完成后刷新本页即可。</p>
+    <div id="app" style="display:none"></div>
+  </body>
+</html>
+"""
+                return HTMLResponse(content=html, status_code=200)
+
+        @app.get("/ui", include_in_schema=False)
+        @app.get("/ui/", include_in_schema=False)
+        def ui_redirect() -> RedirectResponse:
+            return RedirectResponse(url="/ui2/", status_code=307)
 
     logger.info("app.started", extra={"fields": {"port": config.server.port}})
     return app
