@@ -21,23 +21,23 @@ is_writable_dir() {
 }
 
 if ! is_writable_dir "${DATA_DIR}"; then
-  echo "[fcam] WARN: ${DATA_DIR} is not writable."
+  echo "[fcam] WARN: ${DATA_DIR} is not writable." >&2
   ls -ld "${DATA_DIR}" 2>/dev/null || true
 
   # If the user explicitly configured database settings, don't silently override.
   # Otherwise, fall back to a writable tmp location so the service can boot.
   if [ -n "${FCAM_DATABASE_URL:-}" ] || [ -n "${FCAM_DATABASE__URL:-}" ] || [ -n "${FCAM_DATABASE__PATH:-}" ]; then
-    echo "[fcam] ERROR: database is configured but ${DATA_DIR} is not writable; refusing to start."
-    echo "[fcam]        Fix by mounting a writable volume to ${DATA_DIR}, or set FCAM_DATABASE__URL/FCAM_DATABASE_URL to Postgres."
+    echo "[fcam] ERROR: database is configured but ${DATA_DIR} is not writable; refusing to start." >&2
+    echo "[fcam]        Fix by mounting a writable volume to ${DATA_DIR}, or set FCAM_DATABASE__URL/FCAM_DATABASE_URL to Postgres." >&2
     exit 1
   fi
 
   if [ "${FCAM_DB_FALLBACK_TMP:-1}" = "1" ]; then
     export FCAM_DATABASE__PATH="/tmp/api_manager.db"
-    echo "[fcam] WARN: falling back to SQLite at ${FCAM_DATABASE__PATH} (NOT persistent)."
-    echo "[fcam]       To keep persistence, mount a writable volume to ${DATA_DIR} or configure Postgres."
+    echo "[fcam] WARN: falling back to SQLite at ${FCAM_DATABASE__PATH} (NOT persistent)." >&2
+    echo "[fcam]       To keep persistence, mount a writable volume to ${DATA_DIR} or configure Postgres." >&2
   else
-    echo "[fcam] ERROR: ${DATA_DIR} not writable and FCAM_DB_FALLBACK_TMP=0; refusing to start."
+    echo "[fcam] ERROR: ${DATA_DIR} not writable and FCAM_DB_FALLBACK_TMP=0; refusing to start." >&2
     exit 1
   fi
 fi

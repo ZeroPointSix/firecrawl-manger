@@ -22,6 +22,20 @@ def _database_url() -> str:
     url = os.environ.get("FCAM_DATABASE_URL")
     if url:
         return url
+
+    url = os.environ.get("FCAM_DATABASE__URL")
+    if url:
+        return url
+
+    path = os.environ.get("FCAM_DATABASE__PATH")
+    if path:
+        # Support overriding sqlite file location for migration-time bootstrapping.
+        # - absolute: /app/data/api_manager.db -> sqlite:////app/data/api_manager.db
+        # - relative: ./data/api_manager.db   -> sqlite:///./data/api_manager.db
+        if os.path.isabs(path):
+            return f"sqlite:////{path.lstrip('/')}"
+        return f"sqlite:///{path}"
+
     cfg, _ = load_config()
     return build_database_url(cfg)
 
