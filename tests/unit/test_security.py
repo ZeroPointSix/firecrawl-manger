@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import base64
 
+import pytest
+
 from app.core.security import (
     constant_time_equals,
     decrypt_api_key,
@@ -10,6 +12,8 @@ from app.core.security import (
     hmac_sha256_hex,
     mask_api_key_last4,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_derive_master_key_bytes_accepts_base64_32_bytes():

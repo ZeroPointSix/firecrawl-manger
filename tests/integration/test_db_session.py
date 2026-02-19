@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from sqlalchemy import text
 
 from app.config import AppConfig
 from app.db.models import Base
 from app.db.session import create_engine_from_config, create_session_factory
+
+pytestmark = pytest.mark.integration
 
 
 def test_create_session_factory_can_query(tmp_path):

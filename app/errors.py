@@ -78,6 +78,12 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_fcam_error(request: Request, exc: FcamError) -> JSONResponse:
         request_id = get_request_id() or getattr(request.state, "request_id", None) or "-"
         request.state.error_code = exc.code
+        request.state.error_details = {
+            "code": exc.code,
+            "message": exc.message,
+            "details": exc.details,
+            "retry_after": exc.retry_after,
+        }
         logger.warning(
             "request.rejected",
             extra={
@@ -97,6 +103,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         request_id = get_request_id() or getattr(request.state, "request_id", None) or "-"
         request.state.error_code = "VALIDATION_ERROR"
         safe_errors = [{k: v for k, v in e.items() if k != "input"} for e in exc.errors()]
+        request.state.error_details = {
+            "code": "VALIDATION_ERROR",
+            "message": "Validation error",
+            "details": {"errors": safe_errors[:20]},
+        }
         logger.warning(
             "request.validation_failed",
             extra={
@@ -121,6 +132,11 @@ def register_exception_handlers(app: FastAPI) -> None:
         code = "NOT_FOUND" if exc.status_code == 404 else "INTERNAL_ERROR"
         message = "Not found" if exc.status_code == 404 else "HTTP error"
         request.state.error_code = code
+        request.state.error_details = {
+            "code": code,
+            "message": message,
+            "details": {"status_code": exc.status_code},
+        }
         logger.warning(
             "request.http_error",
             extra={
@@ -138,6 +154,11 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _handle_unexpected(request: Request, exc: Exception) -> JSONResponse:
         request_id = get_request_id() or getattr(request.state, "request_id", None) or "-"
         request.state.error_code = "INTERNAL_ERROR"
+        request.state.error_details = {
+            "code": "INTERNAL_ERROR",
+            "message": "Internal error",
+            "details": {"exception_type": exc.__class__.__name__},
+        }
         logger.exception(
             "request.unhandled_exception",
             extra={

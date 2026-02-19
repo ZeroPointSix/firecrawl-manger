@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, Secrets
 from app.db.models import Base
 from app.main import create_app
+
+pytestmark = pytest.mark.integration
 
 
 def test_ui2_is_served_when_control_plane_enabled(tmp_path):
@@ -47,4 +50,3 @@ def test_ui2_is_not_served_when_control_plane_disabled(tmp_path):
 
     assert resp.status_code == 404
     assert resp.json()["error"]["code"] == "NOT_FOUND"
-

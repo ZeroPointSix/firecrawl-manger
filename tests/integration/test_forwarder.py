@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import gzip
 from typing import Any
 
 import httpx
@@ -15,6 +15,8 @@ from app.core.time import today_in_timezone
 from app.db.models import ApiKey, Base, Client
 from app.db.session import create_engine_from_config, create_session_factory
 from app.errors import FcamError
+
+pytestmark = pytest.mark.integration
 
 
 def _setup_db(tmp_path) -> tuple[AppConfig, Any]:
@@ -272,3 +274,48 @@ def test_forwarder_disables_key_if_decrypt_fails_and_uses_next(tmp_path):
     db.refresh(k_bad)
     assert k_bad.status == "decrypt_failed"
     assert k_bad.is_active is False
+
+
+def test_forwarder_drops_content_encoding_and_length_headers(tmp_path):
+    config, db = _setup_db(tmp_path)
+    secrets = Secrets(admin_token="admin", master_key="master")
+    client, _ = _add_client(db, secrets.master_key)
+    _add_key(db, secrets.master_key, "fc-key-1", "h1", "0001", client_id=client.id)
+
+    raw = b'{"ok":true,"data":"hello"}' * 50
+    gz = gzip.compress(raw)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+                "content-length": str(len(gz)),
+            },
+            content=gz,
+        )
+
+    fwd = Forwarder(
+        config=config,
+        secrets=secrets,
+        key_pool=KeyPool(),
+        key_concurrency=ConcurrencyManager(),
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = fwd.forward(
+        db=db,
+        request_id="req_12345678",
+        client=client,
+        method="POST",
+        upstream_path="/scrape",
+        json_body={"url": "https://example.com"},
+        inbound_headers={"content-type": "application/json"},
+    )
+
+    resp = result.response
+    assert resp.status_code == 200
+    assert resp.body == raw
+    assert resp.headers.get("content-encoding") is None
+    assert int(resp.headers["content-length"]) == len(raw)

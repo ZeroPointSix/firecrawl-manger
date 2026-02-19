@@ -7,15 +7,19 @@
 
 ### 1.1 Base URL
 - 网关（FCAM）：`http(s)://<fcam_host>:<port>`
-- 上游（Firecrawl）：由配置 `firecrawl.base_url` 决定（推荐：`https://api.firecrawl.dev/v1`）
+- 上游（Firecrawl）：由配置 `firecrawl.base_url` 决定（推荐：`https://api.firecrawl.dev`）
 
-> 重要：本项目约定 `firecrawl.base_url` **包含** `/v1`。网关转发时只拼接资源路径（如 `/scrape`）。  
-> 例如：`POST /api/scrape` → 上游：`POST https://api.firecrawl.dev/v1/scrape`。
+> 约定：`firecrawl.base_url` 建议配置为上游 root（不包含版本号）；FCAM 会根据入站路径转发到对应版本：  
+> - `/api/*` 与 `/v1/*` → 上游 `/v1/*`  
+> - `/v2/*`           → 上游 `/v2/*`  
+>
+> 兼容：允许 `firecrawl.base_url` 以 `/v1` 或 `/v2` 结尾（历史/特殊配置），FCAM 会自动去重版本前缀，避免出现 `/v1/v1` 或 `/v1/v2` 的重复拼接。
 
-完整 URL 示例（假设 `firecrawl.base_url=https://api.firecrawl.dev/v1`）：
+完整 URL 示例（假设 `firecrawl.base_url=https://api.firecrawl.dev`）：
 - `POST http://localhost:8000/api/scrape` → `POST https://api.firecrawl.dev/v1/scrape`
 - `POST http://localhost:8000/api/crawl` → `POST https://api.firecrawl.dev/v1/crawl`
 - `GET  http://localhost:8000/api/crawl/abc123` → `GET https://api.firecrawl.dev/v1/crawl/abc123`
+- `POST http://localhost:8000/v2/scrape` → `POST https://api.firecrawl.dev/v2/scrape`
 
 ### 1.2 Content-Type
 - 除 `GET` 外，默认只接受：`Content-Type: application/json`
@@ -223,6 +227,61 @@
 说明：
 - 若上游返回 401/403，可按策略将 key 标记为 `disabled`
 - 若上游返回 429，将 key 标记为 `cooling` 并写入 `cooldown_until`
+
+### 2.5.1 POST /admin/keys/batch — 批量编辑/批量测试（尽力而为）
+**Auth**：Admin
+
+> 语义：对 `ids` 中的每个 key 执行（允许部分成功），返回每项的成功/失败原因；不会因为某一项失败而回滚其他已成功项。若提供 `test`，将以**有限并发**方式执行 key test，以降低大量 keys 顺序测试导致的超时风险。
+
+**Request**
+```json
+{
+  "ids": [1, 2, 3],
+  "patch": {
+    "is_active": true,
+    "plan_type": "free",
+    "daily_quota": 10,
+    "max_concurrent": 2,
+    "rate_limit_per_min": 10,
+    "name": "optional"
+  },
+  "reset_cooldown": true,
+  "soft_delete": false,
+  "test": {
+    "mode": "scrape",
+    "test_url": "https://example.com"
+  }
+}
+```
+
+字段说明：
+- `ids`：要操作的 key_id 列表（建议 ≤ 200）
+- `patch`：对 key 执行字段更新（全部可选；不支持在 batch 内轮换 `api_key` 明文）
+- `reset_cooldown`：若为 true，清空 `cooldown_until`；并将 `cooling/failed` 恢复为 `active`（不覆盖 `disabled/quota_exceeded/decrypt_failed`）
+- `soft_delete`：若为 true，等价于“批量禁用”（`is_active=false,status=disabled`）
+- `test`：若提供，则对每个 key 触发一次 key test（等价于调用 `/admin/keys/{id}/test`，按 `control_plane.batch_key_test_max_workers` 限制并发），并返回 test 结果
+
+**Response 200**
+```json
+{
+  "requested": 3,
+  "succeeded": 2,
+  "failed": 1,
+  "results": [
+    {
+      "id": 1,
+      "ok": true,
+      "key": { "id": 1, "api_key_masked": "fc-****5678", "status": "active" },
+      "test": { "ok": true, "upstream_status_code": 200, "latency_ms": 123 }
+    },
+    {
+      "id": 999,
+      "ok": false,
+      "error": { "code": "NOT_FOUND", "message": "Not found" }
+    }
+  ]
+}
+```
 
 ### 2.6 POST /admin/keys/reset-quota — 手动重置所有密钥配额
 **Auth**：Admin
@@ -438,6 +497,7 @@
 
       "retry_count": 1,
       "error_message": null,
+      "error_details": null,
       "idempotency_key": null
     }
   ],
@@ -497,7 +557,27 @@
 
 语义：与 `/api/*` 等价（仅路径不同），鉴权仍为 `Authorization: Bearer <CLIENT_TOKEN>`。
 
-### 3.1 POST /api/scrape → 上游 POST {base_url}/scrape
+### 3.0.1 Firecrawl 兼容层（/v2/*，用于 SDK 迁移）
+**Auth**：Client
+
+说明：FCAM 额外提供一组与 Firecrawl v2 路径对齐的兼容端点（`/v2/*` 透明转发），例如：
+- `POST /v2/scrape`
+- `POST /v2/crawl`
+- `GET  /v2/crawl/{id}`
+- `POST /v2/map`
+- `POST /v2/search`
+- `POST /v2/extract`
+- `POST /v2/agent`
+- `POST /v2/batch/scrape`
+- `GET  /v2/batch/scrape/{id}`
+
+并提供少量别名（为兼容 `start/status` 形态，网关会重写到主路径并在必要时回退）：
+- `POST /v2/crawl/start` ↔ `POST /v2/crawl`
+- `GET  /v2/crawl/status/{id}` ↔ `GET /v2/crawl/{id}`
+- `POST /v2/batch/scrape/start` ↔ `POST /v2/batch/scrape`
+- `GET  /v2/batch/scrape/status/{id}` ↔ `GET /v2/batch/scrape/{id}`
+
+### 3.1 POST /api/scrape → 上游 POST {base_url}/v1/scrape
 **Auth**：Client
 
 **Request**
@@ -506,18 +586,18 @@
 **Response**
 - 透传上游响应
 
-### 3.2 POST /api/crawl → 上游 POST {base_url}/crawl
+### 3.2 POST /api/crawl → 上游 POST {base_url}/v1/crawl
 **Auth**：Client
 
 **建议**：调用方传 `X-Idempotency-Key`（避免重复创建任务）
 
-### 3.3 GET /api/crawl/{id} → 上游 GET {base_url}/crawl/{id}
+### 3.3 GET /api/crawl/{id} → 上游 GET {base_url}/v1/crawl/{id}
 **Auth**：Client
 
-### 3.4 POST /api/search → 上游 POST {base_url}/search
+### 3.4 POST /api/search → 上游 POST {base_url}/v1/search
 **Auth**：Client
 
-### 3.5 POST /api/agent → 上游 POST {base_url}/agent
+### 3.5 POST /api/agent → 上游 POST {base_url}/v1/agent
 **Auth**：Client
 
 **建议**：调用方强制传 `X-Idempotency-Key`（避免重复创建/重复扣费风险）

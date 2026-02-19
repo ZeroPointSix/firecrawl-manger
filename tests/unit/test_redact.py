@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from app.core.redact import REDACTED, redact_data, redact_text
+
+pytestmark = pytest.mark.unit
 
 
 def test_redact_text_masks_bearer_and_firecrawl_key():

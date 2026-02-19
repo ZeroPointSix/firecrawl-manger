@@ -6,7 +6,16 @@ param(
   [int]$TimeoutSec = 10,
 
   [Parameter(Mandatory = $false)]
-  [switch]$SkipReady
+  [switch]$SkipReady,
+
+  [Parameter(Mandatory = $false)]
+  [string]$AdminToken = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$ClientToken = "",
+
+  [Parameter(Mandatory = $false)]
+  [string]$ScrapeUrl = "https://example.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,24 +31,84 @@ function Normalize-BaseUrl([string]$Url) {
   return $trimmed
 }
 
-function Invoke-HttpJson([string]$Url, [int]$TimeoutSec) {
-  $res = Invoke-WebRequest -Uri $Url -Method GET -UseBasicParsing -TimeoutSec $TimeoutSec
-  $contentType = $res.Headers["Content-Type"]
+function Invoke-HttpJson(
+  [string]$Url,
+  [string]$Method,
+  [int]$TimeoutSec,
+  [hashtable]$Headers = $null,
+  [string]$Body = $null,
+  [string]$ContentType = $null
+) {
+  $statusCode = $null
+  $raw = $null
+  $contentType = $null
+  $error = $null
+
+  try {
+    $params = @{
+      Uri = $Url
+      Method = $Method
+      UseBasicParsing = $true
+      TimeoutSec = $TimeoutSec
+    }
+    if ($Headers) {
+      $params["Headers"] = $Headers
+    }
+    if ($Body) {
+      $params["Body"] = $Body
+    }
+    if ($ContentType) {
+      $params["ContentType"] = $ContentType
+    }
+
+    $res = Invoke-WebRequest @params
+    $statusCode = [int]$res.StatusCode
+    $raw = $res.Content
+    $contentType = $res.Headers["Content-Type"]
+  } catch {
+    $error = $_.Exception.Message
+    $resp = $_.Exception.Response
+    if ($resp) {
+      try {
+        $statusCode = [int]$resp.StatusCode.value__
+      } catch {
+        $statusCode = $null
+      }
+      try {
+        $contentType = $resp.Headers["Content-Type"]
+      } catch {
+        try {
+          $contentType = $resp.ContentType
+        } catch {
+          $contentType = $null
+        }
+      }
+      try {
+        $stream = $resp.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $raw = $reader.ReadToEnd()
+        $reader.Close()
+      } catch {
+        $raw = $null
+      }
+    }
+  }
 
   $json = $null
-  if ($contentType -and $contentType.ToLowerInvariant().Contains("application/json")) {
+  if ($contentType -and $contentType.ToLowerInvariant().Contains("application/json") -and $raw) {
     try {
-      $json = $res.Content | ConvertFrom-Json -ErrorAction Stop
+      $json = $raw | ConvertFrom-Json -ErrorAction Stop
     } catch {
       $json = $null
     }
   }
 
   return [pscustomobject]@{
-    StatusCode = [int]$res.StatusCode
+    StatusCode = $statusCode
     ContentType = $contentType
-    Raw = $res.Content
+    Raw = $raw
     Json = $json
+    Error = $error
   }
 }
 
@@ -57,10 +126,11 @@ Write-Host ""
 $failed = $false
 
 try {
-  $r = Invoke-HttpJson ("{0}/healthz" -f $BaseUrl) $TimeoutSec
+  $r = Invoke-HttpJson ("{0}/healthz" -f $BaseUrl) "GET" $TimeoutSec
   if ($r.StatusCode -ne 200) {
     $failed = $true
-    Write-Result "GET /healthz" $false ("HTTP {0}" -f $r.StatusCode)
+    $details = $(if ($null -ne $r.StatusCode) { "HTTP {0}" -f $r.StatusCode } else { $r.Error })
+    Write-Result "GET /healthz" $false $details
   } else {
     $details = $(if ($r.Json -and $null -ne $r.Json.ok) { "ok={0}" -f $r.Json.ok } else { "HTTP 200" })
     Write-Result "GET /healthz" $true $details
@@ -72,10 +142,10 @@ try {
 
 if (-not $SkipReady) {
   try {
-    $r = Invoke-HttpJson ("{0}/readyz" -f $BaseUrl) $TimeoutSec
+    $r = Invoke-HttpJson ("{0}/readyz" -f $BaseUrl) "GET" $TimeoutSec
     if ($r.StatusCode -ne 200) {
       $failed = $true
-      $details = "HTTP {0}" -f $r.StatusCode
+      $details = $(if ($null -ne $r.StatusCode) { "HTTP {0}" -f $r.StatusCode } else { $r.Error })
       if ($r.Json -and $r.Json.message) {
         $details = "{0}; message={1}" -f $details, $r.Json.message
       }
@@ -86,6 +156,47 @@ if (-not $SkipReady) {
   } catch {
     $failed = $true
     Write-Result "GET /readyz" $false $_.Exception.Message
+  }
+}
+
+if ($AdminToken) {
+  try {
+    $headers = @{ Authorization = "Bearer $AdminToken" }
+    $r = Invoke-HttpJson ("{0}/admin/stats" -f $BaseUrl) "GET" $TimeoutSec $headers
+    if ($r.StatusCode -ne 200) {
+      $failed = $true
+      $details = $(if ($null -ne $r.StatusCode) { "HTTP {0}" -f $r.StatusCode } else { $r.Error })
+      Write-Result "GET /admin/stats (auth)" $false $details
+    } else {
+      Write-Result "GET /admin/stats (auth)" $true "HTTP 200"
+    }
+  } catch {
+    $failed = $true
+    Write-Result "GET /admin/stats (auth)" $false $_.Exception.Message
+  }
+}
+
+if ($ClientToken) {
+  try {
+    $headers = @{
+      Authorization = "Bearer $ClientToken"
+      "Content-Type" = "application/json"
+    }
+    $payload = @{ url = $ScrapeUrl } | ConvertTo-Json -Compress
+    $r = Invoke-HttpJson ("{0}/api/scrape" -f $BaseUrl) "POST" $TimeoutSec $headers $payload "application/json"
+    if ($r.StatusCode -ne 200) {
+      $failed = $true
+      $details = $(if ($null -ne $r.StatusCode) { "HTTP {0}" -f $r.StatusCode } else { $r.Error })
+      if ($r.Json -and $r.Json.error -and $r.Json.error.code) {
+        $details = "{0}; code={1}" -f $details, $r.Json.error.code
+      }
+      Write-Result "POST /api/scrape (auth)" $false $details
+    } else {
+      Write-Result "POST /api/scrape (auth)" $true "HTTP 200"
+    }
+  } catch {
+    $failed = $true
+    Write-Result "POST /api/scrape (auth)" $false $_.Exception.Message
   }
 }
 

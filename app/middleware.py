@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import uuid
 from time import perf_counter
+from typing import Any
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.core.redact import redact_data
 from app.db.models import RequestLog
 from app.errors import FcamError, build_error_response
 from app.observability.logging import request_id_ctx
@@ -33,6 +36,8 @@ def _infer_api_endpoint(path: str) -> str | None:
         prefix = "/api/"
     elif path.startswith("/v1/"):
         prefix = "/v1/"
+    elif path.startswith("/v2/"):
+        prefix = "/v2/"
     else:
         return None
 
@@ -46,6 +51,100 @@ def _infer_api_endpoint(path: str) -> str | None:
 
     endpoint = first[:32] if first else "unknown"
     return endpoint or "unknown"
+
+
+_DEFAULT_SENSITIVE_KEYS = {
+    "authorization",
+    "api_key",
+    "token",
+    "password",
+    "secret",
+    "master_key",
+}
+
+_MAX_ERROR_DETAILS_CHARS = 2000
+_MAX_ERROR_BODY_PREVIEW_BYTES = 8192
+
+
+def _dump_error_details(value: Any) -> str | None:
+    if value is None:
+        return None
+
+    try:
+        safe = redact_data(value, _DEFAULT_SENSITIVE_KEYS)
+        text = json.dumps(safe, ensure_ascii=False)
+        if len(text) <= _MAX_ERROR_DETAILS_CHARS:
+            return text
+
+        base: dict[str, Any] = {}
+        if isinstance(safe, dict):
+            base = {k: safe.get(k) for k in ("code", "message") if k in safe}
+        base["truncated"] = True
+
+        preview_len = min(len(text), _MAX_ERROR_DETAILS_CHARS)
+        for _ in range(5):
+            candidate = dict(base)
+            candidate["preview"] = text[:preview_len]
+            dumped = json.dumps(candidate, ensure_ascii=False)
+            if len(dumped) <= _MAX_ERROR_DETAILS_CHARS:
+                return dumped
+            preview_len = max(int(preview_len * 0.6), 0)
+
+        return json.dumps(base, ensure_ascii=False)
+    except Exception:
+        return None
+
+
+async def _maybe_capture_error_from_response(request: Request, response: Response) -> Response:
+    if getattr(request.state, "error_code", None) is not None:
+        return response
+
+    status_code = getattr(response, "status_code", None)
+    if status_code is None or int(status_code) < 400:
+        return response
+
+    body: bytes = getattr(response, "body", b"") or b""
+    if not body and hasattr(response, "body_iterator"):
+        chunks: list[bytes] = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+        body = b"".join(chunks)
+
+        headers = dict(response.headers)
+        headers.pop("content-length", None)
+        response = Response(
+            content=body,
+            status_code=int(status_code),
+            headers=headers,
+            media_type=getattr(response, "media_type", None),
+            background=getattr(response, "background", None),
+        )
+
+    content_type = (response.headers.get("content-type") or "").strip()
+
+    details: dict[str, Any] = {
+        "status_code": int(status_code),
+        "content_type": content_type,
+        "body_bytes": len(body),
+    }
+
+    if body:
+        preview_bytes = body[:_MAX_ERROR_BODY_PREVIEW_BYTES]
+        details["body_preview"] = preview_bytes.decode("utf-8", errors="replace")
+        details["body_truncated"] = len(body) > _MAX_ERROR_BODY_PREVIEW_BYTES
+        if "application/json" in content_type.lower() and not details["body_truncated"]:
+            try:
+                details["body_json"] = json.loads(body)
+            except Exception:
+                pass
+
+    request.state.error_code = "UPSTREAM_HTTP_ERROR"
+    request.state.error_details = {
+        "code": "UPSTREAM_HTTP_ERROR",
+        "message": "Upstream returned error response",
+        "details": details,
+    }
+    return response
 
 
 def _persist_request_log(request: Request, *, status_code: int | None, response_time_ms: int) -> str | None:
@@ -63,6 +162,7 @@ def _persist_request_log(request: Request, *, status_code: int | None, response_
     retry_count = int(getattr(request.state, "retry_count", 0) or 0)
     idempotency_key = request.headers.get("x-idempotency-key")
     error_code = getattr(request.state, "error_code", None)
+    error_details = _dump_error_details(getattr(request.state, "error_details", None))
 
     success = None
     if status_code is not None:
@@ -83,6 +183,7 @@ def _persist_request_log(request: Request, *, status_code: int | None, response_
                         success=success,
                         retry_count=retry_count,
                         error_message=error_code,
+                        error_details=error_details,
                         idempotency_key=idempotency_key,
                     )
                 )
@@ -111,6 +212,7 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
 
             response.headers["X-Request-Id"] = request_id
+            response = await _maybe_capture_error_from_response(request, response)
             latency_ms = int((perf_counter() - start) * 1000)
             endpoint = _persist_request_log(
                 request,
@@ -155,6 +257,12 @@ class FcamErrorMiddleware(BaseHTTPMiddleware):
         except FcamError as exc:
             request_id = getattr(request.state, "request_id", None) or request_id_ctx.get() or _new_request_id()
             request.state.error_code = exc.code
+            request.state.error_details = {
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+                "retry_after": exc.retry_after,
+            }
             logger.warning(
                 "request.rejected",
                 extra={
@@ -184,6 +292,8 @@ class RequestLimitsMiddleware(BaseHTTPMiddleware):
             api_prefix = "/api/"
         elif path.startswith("/v1/"):
             api_prefix = "/v1/"
+        elif path.startswith("/v2/"):
+            api_prefix = "/v2/"
 
         if api_prefix is not None:
             seg = path[len(api_prefix) :].split("/", 1)[0]

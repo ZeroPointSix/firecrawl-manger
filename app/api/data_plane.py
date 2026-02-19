@@ -30,7 +30,7 @@ def scrape(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/scrape",
+        upstream_path="/v1/scrape",
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -66,7 +66,7 @@ def crawl(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/crawl",
+        upstream_path="/v1/crawl",
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -88,7 +88,7 @@ def crawl_status(
         request_id=request.state.request_id,
         client=client,
         method="GET",
-        upstream_path=f"/crawl/{crawl_id}",
+        upstream_path=f"/v1/crawl/{crawl_id}",
         json_body=None,
         inbound_headers=dict(request.headers),
     )
@@ -110,7 +110,7 @@ def search(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/search",
+        upstream_path="/v1/search",
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -146,7 +146,7 @@ def agent(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/agent",
+        upstream_path="/v1/agent",
         json_body=payload,
         inbound_headers=dict(request.headers),
     )

@@ -52,7 +52,7 @@ pytest --cov=app --cov-fail-under=80
 真实 API E2E 测试（不使用 TestClient，不写 DB seed；通过 HTTP 请求驱动）：
 ```powershell
 $env:FCAM_E2E="1"
-& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/e2e/test_e2e_real_api.py"
 ```
 
 可选：启用“真实上游”（会真实调用 Firecrawl，有配额/费用风险，请仅在隔离环境执行）：
@@ -61,7 +61,7 @@ $env:FCAM_E2E="1"
 $env:FCAM_E2E_ALLOW_UPSTREAM="1"
 $env:FCAM_E2E_FIRECRAWL_API_KEY="<your_firecrawl_api_key>"
 # $env:FCAM_E2E_SCRAPE_URL="https://example.com"  # 可选
-& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/e2e/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
 
 ```
 
@@ -79,6 +79,32 @@ FCAM_E2E_SCRAPE_URL=https://example.com
 
 ```bash
 docker compose up --build
+```
+
+### 常见问题：`sqlite3.OperationalError: unable to open database file`
+
+默认 SQLite 数据库在容器内路径为 `/app/data/api_manager.db`。镜像以非 root 用户运行（uid `10001`），如果你用宿主机目录挂载 `-v $(pwd)/data:/app/data`，宿主机的 `./data` 可能对该 uid 不可写，导致启动时 `alembic upgrade head` 失败。
+
+修复方式（二选一）：
+
+1) 继续用宿主机目录（Linux 服务器上执行）：
+```bash
+mkdir -p ./data
+sudo chown -R 10001:10001 ./data
+```
+
+2) 改用命名卷（避免权限问题）：
+```bash
+docker volume create fcam_data
+docker run ... -v fcam_data:/app/data ...
+```
+
+如需固定版本（例如 `v0.1.0`）：
+
+```bash
+export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.0"
+docker compose pull
+docker compose up -d --no-build
 ```
 
 探活：

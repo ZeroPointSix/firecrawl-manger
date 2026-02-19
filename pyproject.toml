@@ -1,8 +1,19 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-q"]
+addopts = [
+  "-q",
+  "--basetemp",
+  ".pytest_tmp",
+  "--strict-markers",
+]
 markers = [
-  "e2e: real HTTP end-to-end tests (opt-in via FCAM_E2E=1)",
+  "unit: fast, isolated unit tests (no HTTP server, no real DB/network)",
+  "integration: integration tests (TestClient/SQLite/MockTransport; no real upstream)",
+  "e2e: black-box end-to-end tests (HTTP; opt-in via FCAM_E2E=1)",
+  "smoke: smoke tests for core functionality (run before large test suites)",
+  "regression: regression test suite (re-run after changes; should be fast and stable)",
+  "upstream: real upstream calls (cost/flaky; requires FCAM_E2E_ALLOW_UPSTREAM=1)",
+  "external: external environment compatibility tests (requires FCAM_FC_* env)",
 ]
 
 [tool.ruff]

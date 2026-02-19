@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NCard, NDataTable, NInput, NSelect, NSpace, NTag, useMessage } from "naive-ui";
+import { NButton, NCard, NDataTable, NInput, NModal, NSelect, NSpace, NTag, useMessage } from "naive-ui";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
 
 import { fetchRequestLogs, type RequestLogItem } from "@/api/logs";
@@ -142,6 +142,44 @@ function levelTag(row: RequestLogItem) {
   return h(NTag, { size: "small", type: type as any }, { default: () => t });
 }
 
+function redactText(text: string) {
+  const bearerRedacted = text.replace(/\bbearer\s+[a-z0-9._\-~+/]+=*\b/gi, "Bearer [REDACTED]");
+  const firecrawlRedacted = bearerRedacted.replace(/\bfc-[A-Za-z0-9]{8,}\b/g, "fc-[REDACTED]");
+  return firecrawlRedacted;
+}
+
+function formatJsonMaybe(value: string | null): string {
+  if (!value) return "-";
+  const safe = redactText(value);
+  try {
+    return JSON.stringify(JSON.parse(safe), null, 2);
+  } catch {
+    return safe;
+  }
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    message.success("已复制");
+  } catch {
+    message.warning("复制失败（请手动复制）");
+  }
+}
+
+const showDetail = ref(false);
+const detailRow = ref<RequestLogItem | null>(null);
+
+function openDetail(row: RequestLogItem) {
+  detailRow.value = row;
+  showDetail.value = true;
+}
+
+watch(showDetail, (v) => {
+  if (v) return;
+  detailRow.value = null;
+});
+
 const columns = [
   { title: "时间", key: "created_at", width: 190 },
   { title: "level", key: "level", width: 90, render: (row: RequestLogItem) => levelTag(row) },
@@ -169,6 +207,17 @@ const columns = [
   },
   { title: "retry", key: "retry_count", width: 70 },
   { title: "error_code", key: "error_message" },
+  {
+    title: "详情",
+    key: "detail",
+    width: 90,
+    render: (row: RequestLogItem) =>
+      h(
+        NButton,
+        { size: "tiny", tertiary: true, onClick: () => openDetail(row) },
+        { default: () => "查看" }
+      ),
+  },
   {
     title: "request_id",
     key: "request_id",
@@ -220,4 +269,38 @@ const columns = [
       </n-space>
     </n-space>
   </n-card>
+
+  <n-modal v-model:show="showDetail" preset="card" style="max-width: 860px">
+    <n-card title="日志详情" :bordered="false">
+      <n-space v-if="detailRow" vertical>
+        <n-space align="center" justify="space-between">
+          <div class="muted" style="font-size: 12px">
+            <span class="mono">request_id={{ detailRow.request_id }}</span>
+          </div>
+          <n-button size="tiny" @click="copyText(detailRow.request_id)">复制 request_id</n-button>
+        </n-space>
+
+        <n-space wrap size="small" class="muted" style="font-size: 12px">
+          <div>time={{ detailRow.created_at }}</div>
+          <div>endpoint={{ detailRow.endpoint }}</div>
+          <div>method={{ detailRow.method }}</div>
+          <div>status={{ detailRow.status_code ?? "-" }}</div>
+          <div>latency_ms={{ detailRow.response_time_ms ?? "-" }}</div>
+          <div>retry={{ detailRow.retry_count }}</div>
+          <div>client_id={{ detailRow.client_id ?? "-" }}</div>
+          <div>key={{ detailRow.api_key_masked ?? "-" }}</div>
+          <div>error_code={{ detailRow.error_message ?? "-" }}</div>
+          <div>idempotency_key={{ detailRow.idempotency_key ?? "-" }}</div>
+        </n-space>
+
+        <n-card size="small" title="error_details（已脱敏/截断）">
+          <pre class="mono" style="white-space: pre-wrap; margin: 0">{{ formatJsonMaybe(detailRow.error_details) }}</pre>
+        </n-card>
+
+        <n-space justify="end">
+          <n-button @click="showDetail = false">关闭</n-button>
+        </n-space>
+      </n-space>
+    </n-card>
+  </n-modal>
 </template>

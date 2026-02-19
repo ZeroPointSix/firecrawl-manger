@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import secrets as py_secrets
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -151,6 +152,28 @@ class UpdateKeyRequest(BaseModel):
 class TestKeyRequest(BaseModel):
     mode: str = "scrape"
     test_url: str = "https://example.com"
+
+
+class BatchKeyPatch(BaseModel):
+    name: str | None = Field(default=None, max_length=255)
+    plan_type: str | None = Field(default=None, max_length=32)
+    daily_quota: int | None = Field(default=None, ge=0)
+    max_concurrent: int | None = Field(default=None, ge=0)
+    rate_limit_per_min: int | None = Field(default=None, ge=0)
+    is_active: bool | None = None
+
+
+class BatchKeyTest(BaseModel):
+    mode: str = "scrape"
+    test_url: str = "https://example.com"
+
+
+class BatchKeysRequest(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=200)
+    patch: BatchKeyPatch | None = None
+    reset_cooldown: bool = False
+    soft_delete: bool = False
+    test: BatchKeyTest | None = None
 
 
 class ImportKeysTextRequest(BaseModel):
@@ -578,6 +601,172 @@ def test_key(
             "status": result.observed_status,
         },
     }
+
+
+@router.post("/keys/batch")
+def batch_keys(
+    request: Request,
+    payload: BatchKeysRequest = Body(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    request_id = getattr(request.state, "request_id", "-")
+    ids = [int(x) for x in payload.ids]
+
+    results: list[dict[str, Any]] = []
+    test_tasks: list[tuple[int, int]] = []
+
+    patch_data: dict[str, Any] = {}
+    if payload.patch is not None:
+        patch_data = payload.patch.model_dump(exclude_unset=True)
+
+    if payload.test is not None and payload.test.mode != "scrape":
+        raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported test mode")
+
+    for key_id in ids:
+        try:
+            key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+            if key is None:
+                raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
+
+            changed = False
+
+            if payload.reset_cooldown:
+                key.cooldown_until = None
+                if key.status in {"cooling", "failed"} and key.is_active:
+                    key.status = "active"
+                changed = True
+
+            if patch_data:
+                if "name" in patch_data:
+                    key.name = patch_data["name"]
+                    changed = True
+                if "plan_type" in patch_data and patch_data["plan_type"] is not None:
+                    key.plan_type = patch_data["plan_type"]
+                    changed = True
+                if "daily_quota" in patch_data and patch_data["daily_quota"] is not None:
+                    key.daily_quota = int(patch_data["daily_quota"])
+                    if key.daily_quota is not None and key.daily_usage >= key.daily_quota:
+                        key.status = "quota_exceeded"
+                    changed = True
+                if "max_concurrent" in patch_data and patch_data["max_concurrent"] is not None:
+                    key.max_concurrent = int(patch_data["max_concurrent"])
+                    changed = True
+                if "rate_limit_per_min" in patch_data and patch_data["rate_limit_per_min"] is not None:
+                    key.rate_limit_per_min = int(patch_data["rate_limit_per_min"])
+                    changed = True
+                if "is_active" in patch_data and patch_data["is_active"] is not None:
+                    key.is_active = bool(patch_data["is_active"])
+                    if not key.is_active:
+                        key.status = "disabled"
+                    elif key.status == "disabled":
+                        key.status = "active"
+                    changed = True
+
+            if payload.soft_delete:
+                key.is_active = False
+                key.status = "disabled"
+                changed = True
+
+            if changed:
+                _audit(
+                    db,
+                    request=request,
+                    action="key.batch",
+                    resource_type="api_key",
+                    resource_id=str(key.id),
+                )
+                db.commit()
+                db.refresh(key)
+
+            results.append(
+                {
+                    "id": key_id,
+                    "ok": True,
+                    "key": _key_item(key, request=request),
+                    "test": None,
+                }
+            )
+            if payload.test is not None:
+                test_tasks.append((key_id, len(results) - 1))
+        except FcamError as exc:
+            db.rollback()
+            results.append({"id": key_id, "ok": False, "error": {"code": exc.code, "message": exc.message}})
+        except Exception as exc:
+            db.rollback()
+            logger.exception("admin.keys_batch_failed", extra={"fields": {"api_key_id": key_id}})
+            results.append(
+                {"id": key_id, "ok": False, "error": {"code": "INTERNAL_ERROR", "message": "Internal error"}}
+            )
+
+    if payload.test is not None and test_tasks:
+        SessionLocal = request.app.state.db_session_factory
+        forwarder = request.app.state.forwarder
+        test_mode = payload.test.mode
+        test_url = payload.test.test_url
+
+        def _test_one(key_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+            with SessionLocal() as test_db:
+                key = test_db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+                if key is None:
+                    raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
+
+                try:
+                    test_result = forwarder.test_key(
+                        db=test_db,
+                        request_id=request_id,
+                        key=key,
+                        mode=test_mode,
+                        test_url=test_url,
+                    )
+                    _audit(
+                        test_db,
+                        request=request,
+                        action="key.test",
+                        resource_type="api_key",
+                        resource_id=str(key.id),
+                    )
+                    test_db.commit()
+                    test_db.refresh(key)
+                except Exception:
+                    test_db.rollback()
+                    raise
+
+                return (
+                    {
+                        "ok": test_result.ok,
+                        "upstream_status_code": test_result.upstream_status_code,
+                        "latency_ms": test_result.latency_ms,
+                    },
+                    _key_item(key, request=request),
+                )
+
+        max_workers = request.app.state.config.control_plane.batch_key_test_max_workers
+        workers = max(1, min(int(max_workers), len(test_tasks)))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_test_one, key_id): (key_id, idx) for key_id, idx in test_tasks}
+            for future in as_completed(futures):
+                key_id, idx = futures[future]
+                try:
+                    test_out, key_out = future.result()
+                    results[idx]["test"] = test_out
+                    results[idx]["key"] = key_out
+                except FcamError as exc:
+                    results[idx] = {
+                        "id": key_id,
+                        "ok": False,
+                        "error": {"code": exc.code, "message": exc.message},
+                    }
+                except Exception:
+                    logger.exception("admin.keys_batch_test_failed", extra={"fields": {"api_key_id": key_id}})
+                    results[idx] = {
+                        "id": key_id,
+                        "ok": False,
+                        "error": {"code": "INTERNAL_ERROR", "message": "Internal error"},
+                    }
+
+    succeeded = sum(1 for r in results if r.get("ok") is True)
+    failed = len(results) - succeeded
+    return {"requested": len(ids), "succeeded": succeeded, "failed": failed, "results": results}
 
 
 @router.post("/keys/reset-quota")
@@ -1090,6 +1279,7 @@ def query_logs(
                 func.lower(RequestLog.request_id).like(pattern),
                 func.lower(RequestLog.endpoint).like(pattern),
                 func.lower(func.coalesce(RequestLog.error_message, "")).like(pattern),
+                func.lower(func.coalesce(RequestLog.error_details, "")).like(pattern),
             )
         )
     if request_id is not None:
@@ -1134,6 +1324,7 @@ def query_logs(
                 "success": log.success,
                 "retry_count": log.retry_count,
                 "error_message": log.error_message,
+                "error_details": log.error_details,
                 "idempotency_key": log.idempotency_key,
             }
         )

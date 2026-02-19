@@ -11,6 +11,8 @@ from app.db.models import ApiKey, Base
 from app.db.session import create_engine_from_config, create_session_factory
 from app.errors import FcamError
 
+pytestmark = pytest.mark.integration
+
 
 def _db(tmp_path):
     config = AppConfig()

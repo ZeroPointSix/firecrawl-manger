@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, Secrets
 from app.db.models import Base
 from app.main import create_app
+
+pytestmark = pytest.mark.integration
 
 
 def test_control_plane_can_be_disabled(tmp_path):

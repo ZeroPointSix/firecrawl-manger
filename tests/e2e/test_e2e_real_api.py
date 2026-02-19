@@ -12,8 +12,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _E2E_ENV_FILE = _REPO_ROOT / ".env.e2e"
+
+pytestmark = pytest.mark.e2e
 
 
 def _load_env_file(path: Path, *, allowed_keys: set[str]) -> None:
@@ -181,7 +183,6 @@ def _client_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-@pytest.mark.e2e
 def test_e2e_logs_pagination_level_and_q(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -245,7 +246,6 @@ def test_e2e_logs_pagination_level_and_q(http: httpx.Client, e2e_server: _E2ESer
     assert any(i.get("error_message") == "CLIENT_UNAUTHORIZED" for i in bw["items"])
 
 
-@pytest.mark.e2e
 def test_e2e_audit_logs_pagination_and_filters(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -285,7 +285,6 @@ def test_e2e_audit_logs_pagination_and_filters(http: httpx.Client, e2e_server: _
     assert set(created_ids).issubset(ids)
 
 
-@pytest.mark.e2e
 def test_e2e_client_rotate_token_invalidates_old_token(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -319,7 +318,6 @@ def test_e2e_client_rotate_token_invalidates_old_token(http: httpx.Client, e2e_s
     assert r_new.status_code == 503
 
 
-@pytest.mark.e2e
 def test_e2e_admin_keys_crud(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -377,7 +375,6 @@ def test_e2e_admin_keys_crud(http: httpx.Client, e2e_server: _E2EServer):
     assert not any(int(i["id"]) == key_id for i in r_list2.json()["items"])
 
 
-@pytest.mark.e2e
 def test_e2e_firecrawl_compat_v1_scrape_rejected_without_token_is_logged(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -395,9 +392,10 @@ def test_e2e_firecrawl_compat_v1_scrape_rejected_without_token_is_logged(http: h
     assert item["status_code"] == 401
     assert item["level"] == "warn"
     assert item["error_message"] == "CLIENT_UNAUTHORIZED"
+    assert item.get("error_details")
+    assert "CLIENT_UNAUTHORIZED" in item["error_details"]
 
 
-@pytest.mark.e2e
 def test_e2e_firecrawl_compat_v1_scrape_no_key_configured_is_logged(http: httpx.Client, e2e_server: _E2EServer):
     admin_headers = _admin_headers(e2e_server.admin_token)
 
@@ -434,9 +432,11 @@ def test_e2e_firecrawl_compat_v1_scrape_no_key_configured_is_logged(http: httpx.
     assert item["status_code"] == 503
     assert item["level"] == "error"
     assert item["error_message"] == "NO_KEY_CONFIGURED"
+    assert item.get("error_details")
+    assert "NO_KEY_CONFIGURED" in item["error_details"]
 
 
-@pytest.mark.e2e
+@pytest.mark.upstream
 def test_e2e_firecrawl_compat_scrape_success_with_real_upstream(http: httpx.Client, e2e_server: _E2EServer):
     if not _env_flag("FCAM_E2E_ALLOW_UPSTREAM"):
         pytest.skip("需要设置 FCAM_E2E_ALLOW_UPSTREAM=1 才会执行真实上游调用")
@@ -486,6 +486,8 @@ def test_e2e_firecrawl_compat_scrape_success_with_real_upstream(http: httpx.Clie
         headers={**_client_headers(client_token), "X-Request-Id": request_id},
         json={"url": scrape_url},
     )
+    if r_scrape.status_code == 402:
+        pytest.skip("上游 402 insufficient credits，跳过该用例")
     assert r_scrape.status_code == 200
 
     r_log = http.get("/admin/logs", headers=admin_headers, params={"request_id": request_id})
@@ -496,3 +498,211 @@ def test_e2e_firecrawl_compat_scrape_success_with_real_upstream(http: httpx.Clie
     assert item["endpoint"] == "scrape"
     assert item["status_code"] == 200
     assert item["level"] == "info"
+    assert item.get("error_message") in {None, ""}
+    assert item.get("error_details") in {None, ""}
+
+
+@pytest.mark.upstream
+def test_e2e_api_scrape_success_with_real_upstream(http: httpx.Client, e2e_server: _E2EServer):
+    if not _env_flag("FCAM_E2E_ALLOW_UPSTREAM"):
+        pytest.skip("需要设置 FCAM_E2E_ALLOW_UPSTREAM=1 才会执行真实上游调用")
+
+    firecrawl_api_key = os.environ.get("FCAM_E2E_FIRECRAWL_API_KEY")
+    if not firecrawl_api_key:
+        pytest.skip("需要设置 FCAM_E2E_FIRECRAWL_API_KEY 才能执行真实上游调用")
+
+    admin_headers = _admin_headers(e2e_server.admin_token)
+
+    client_name = f"e2e-api-upstream-{uuid.uuid4().hex[:10]}"
+    r_client = http.post(
+        "/admin/clients",
+        headers=admin_headers,
+        json={
+            "name": client_name,
+            "daily_quota": 1000,
+            "rate_limit_per_min": 60,
+            "max_concurrent": 10,
+            "is_active": True,
+        },
+    )
+    assert r_client.status_code == 201
+    client_id = int(r_client.json()["client"]["id"])
+    client_token = r_client.json()["token"]
+
+    r_key = http.post(
+        "/admin/keys",
+        headers=admin_headers,
+        json={
+            "api_key": firecrawl_api_key,
+            "client_id": client_id,
+            "name": "e2e-api-upstream",
+            "plan_type": "free",
+            "daily_quota": 5,
+            "max_concurrent": 2,
+            "rate_limit_per_min": 10,
+            "is_active": True,
+        },
+    )
+    assert r_key.status_code == 201
+
+    request_id = f"e2eApiScrape_{uuid.uuid4().hex[:24]}"
+    scrape_url = (os.environ.get("FCAM_E2E_SCRAPE_URL") or "https://example.com").strip()
+    r_scrape = http.post(
+        "/api/scrape",
+        headers={**_client_headers(client_token), "X-Request-Id": request_id},
+        json={"url": scrape_url},
+    )
+    if r_scrape.status_code == 429:
+        pytest.skip("上游 429 rate limited，跳过该用例")
+    if r_scrape.status_code == 402:
+        pytest.skip("上游 402 insufficient credits，跳过该用例")
+    assert r_scrape.status_code == 200
+
+    body = r_scrape.json()
+    assert isinstance(body, dict)
+    assert body
+
+    r_log = http.get("/admin/logs", headers=admin_headers, params={"request_id": request_id})
+    assert r_log.status_code == 200
+    items = r_log.json()["items"]
+    assert len(items) == 1
+    item = items[0]
+    assert item["endpoint"] == "scrape"
+    assert item["status_code"] == 200
+    assert item["level"] == "info"
+    assert item.get("error_message") in {None, ""}
+    assert item.get("error_details") in {None, ""}
+
+
+@pytest.mark.upstream
+def test_e2e_admin_key_test_success_with_real_upstream(http: httpx.Client, e2e_server: _E2EServer):
+    if not _env_flag("FCAM_E2E_ALLOW_UPSTREAM"):
+        pytest.skip("需要设置 FCAM_E2E_ALLOW_UPSTREAM=1 才会执行真实上游调用")
+
+    firecrawl_api_key = os.environ.get("FCAM_E2E_FIRECRAWL_API_KEY")
+    if not firecrawl_api_key:
+        pytest.skip("需要设置 FCAM_E2E_FIRECRAWL_API_KEY 才能执行真实上游调用")
+
+    admin_headers = _admin_headers(e2e_server.admin_token)
+
+    client_name = f"e2e-keytest-upstream-{uuid.uuid4().hex[:10]}"
+    r_client = http.post(
+        "/admin/clients",
+        headers=admin_headers,
+        json={
+            "name": client_name,
+            "daily_quota": 1000,
+            "rate_limit_per_min": 60,
+            "max_concurrent": 10,
+            "is_active": True,
+        },
+    )
+    assert r_client.status_code == 201
+    client_id = int(r_client.json()["client"]["id"])
+
+    r_key = http.post(
+        "/admin/keys",
+        headers=admin_headers,
+        json={
+            "api_key": firecrawl_api_key,
+            "client_id": client_id,
+            "name": "e2e-keytest-upstream",
+            "plan_type": "free",
+            "daily_quota": 5,
+            "max_concurrent": 2,
+            "rate_limit_per_min": 10,
+            "is_active": True,
+        },
+    )
+    assert r_key.status_code == 201
+    key_id = int(r_key.json()["id"])
+
+    test_url = (os.environ.get("FCAM_E2E_SCRAPE_URL") or "https://example.com").strip()
+    request_id = f"e2eKeyTest_{uuid.uuid4().hex[:24]}"
+    r_test = http.post(
+        f"/admin/keys/{key_id}/test",
+        headers={**admin_headers, "X-Request-Id": request_id},
+        json={"mode": "scrape", "test_url": test_url},
+    )
+    assert r_test.status_code == 200
+    payload = r_test.json()
+
+    if payload.get("upstream_status_code") == 429:
+        pytest.skip("上游 429 rate limited，跳过该用例")
+    if payload.get("upstream_status_code") == 402:
+        pytest.skip("上游 402 insufficient credits，跳过该用例")
+    assert payload.get("upstream_status_code") == 200
+    assert payload.get("ok") is True
+
+
+@pytest.mark.upstream
+def test_e2e_admin_keys_batch_test_with_real_upstream(http: httpx.Client, e2e_server: _E2EServer):
+    if not _env_flag("FCAM_E2E_ALLOW_UPSTREAM"):
+        pytest.skip("需要设置 FCAM_E2E_ALLOW_UPSTREAM=1 才会执行真实上游调用")
+
+    firecrawl_api_key = os.environ.get("FCAM_E2E_FIRECRAWL_API_KEY")
+    if not firecrawl_api_key:
+        pytest.skip("需要设置 FCAM_E2E_FIRECRAWL_API_KEY 才能执行真实上游调用")
+
+    admin_headers = _admin_headers(e2e_server.admin_token)
+
+    client_name = f"e2e-batchtest-upstream-{uuid.uuid4().hex[:10]}"
+    r_client = http.post(
+        "/admin/clients",
+        headers=admin_headers,
+        json={
+            "name": client_name,
+            "daily_quota": 1000,
+            "rate_limit_per_min": 60,
+            "max_concurrent": 10,
+            "is_active": True,
+        },
+    )
+    assert r_client.status_code == 201
+    client_id = int(r_client.json()["client"]["id"])
+
+    r_key = http.post(
+        "/admin/keys",
+        headers=admin_headers,
+        json={
+            "api_key": firecrawl_api_key,
+            "client_id": client_id,
+            "name": "e2e-batchtest-upstream",
+            "plan_type": "free",
+            "daily_quota": 5,
+            "max_concurrent": 2,
+            "rate_limit_per_min": 10,
+            "is_active": True,
+        },
+    )
+    assert r_key.status_code == 201
+    key_id = int(r_key.json()["id"])
+
+    test_url = (os.environ.get("FCAM_E2E_SCRAPE_URL") or "https://example.com").strip()
+    request_id = f"e2eBatchTest_{uuid.uuid4().hex[:24]}"
+    r_batch = http.post(
+        "/admin/keys/batch",
+        headers={**admin_headers, "X-Request-Id": request_id},
+        json={
+            "ids": [key_id],
+            "patch": {"daily_quota": 10},
+            "reset_cooldown": True,
+            "soft_delete": False,
+            "test": {"mode": "scrape", "test_url": test_url},
+        },
+    )
+    assert r_batch.status_code == 200
+    body = r_batch.json()
+    assert body["requested"] == 1
+    assert body["succeeded"] == 1
+    assert body["failed"] == 0
+
+    result = body["results"][0]
+    assert result["id"] == key_id
+    assert result["ok"] is True
+    assert result["key"]["daily_quota"] == 10
+    if result.get("test", {}).get("upstream_status_code") == 429:
+        pytest.skip("上游 429 rate limited，跳过该用例")
+    if result.get("test", {}).get("upstream_status_code") == 402:
+        pytest.skip("上游 402 insufficient credits，跳过该用例")
+    assert result["test"]["ok"] is True

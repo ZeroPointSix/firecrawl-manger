@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from app.config import AppConfig
 from app.db.cleanup import cleanup_retention
 from app.db.models import AuditLog, Base, Client, IdempotencyRecord, RequestLog
 from app.db.session import create_engine_from_config, create_session_factory
+
+pytestmark = pytest.mark.integration
 
 
 def test_cleanup_retention_deletes_expired_records(tmp_path):

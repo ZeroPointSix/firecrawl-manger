@@ -50,7 +50,7 @@ $env:FCAM_MASTER_KEY="dev_master_key_32_bytes_minimum____"
 常用覆盖示例：
 ```powershell
 $env:FCAM_SERVER__PORT="18000"
-$env:FCAM_FIRECRAWL__BASE_URL="https://api.firecrawl.dev/v1"   # 必须包含 /v1
+$env:FCAM_FIRECRAWL__BASE_URL="https://api.firecrawl.dev"      # 建议不包含 /v1 或 /v2
 $env:FCAM_FIRECRAWL__TIMEOUT="30"
 $env:FCAM_FIRECRAWL__MAX_RETRIES="3"
 ```
@@ -94,7 +94,7 @@ HTTP：
 - `POST /admin/keys/{id}/test`
 
 要点：
-- 该接口会 **真实调用** 上游 Firecrawl：`POST {firecrawl.base_url}/scrape`（body：`{"url": test_url}`）。
+- 该接口会 **真实调用** 上游 Firecrawl：优先探测 `POST /v2/scrape`（如上游不支持则回退到 `/v1/scrape`，body：`{"url": test_url}`）。
 - 返回体包含 `ok` 与 `upstream_status_code`，用它们判断是否真的成功打通上游。
 
 示例：
@@ -143,12 +143,12 @@ HTTP：
 
 - Header：`Authorization: Bearer <CLIENT_TOKEN>`
 - Body：必须是 `application/json`
-- 路径白名单：默认只允许 `scrape|crawl|search|agent`（其他会返回 `PATH_NOT_ALLOWED`）
+- 路径白名单：默认只允许 `scrape|crawl|search|agent|map|extract|batch`（其他会返回 `PATH_NOT_ALLOWED`）
 - 建议你自己传 `X-Request-Id`（便于对齐网关日志）；不传则网关自动生成并通过响应头回传。
 
 ### 4.1.1 Firecrawl SDK/原生 API 兼容路径（推荐用于迁移）
 
-除了 `/api/*` 之外，FCAM 还提供一组 **兼容 Firecrawl `/v1/*` 路径** 的转发端点（用于“尽量少改代码”的迁移场景）：
+除了 `/api/*` 之外，FCAM 还提供一组 **兼容 Firecrawl `/v1/*` 与 `/v2/*` 路径** 的转发端点（用于“尽量少改代码”的迁移场景）：
 
 - `POST /v1/scrape`
 - `POST /v1/crawl`
@@ -156,14 +156,31 @@ HTTP：
 - `POST /v1/search`
 - `POST /v1/agent`
 
+以及 v2（主要为 `/v2/*` 透明转发）：
+- `POST /v2/scrape`
+- `POST /v2/crawl`
+- `GET  /v2/crawl/{id}`
+- `POST /v2/search`
+- `POST /v2/map`
+- `POST /v2/extract`
+- `POST /v2/agent`
+- `POST /v2/batch/scrape`
+- `GET  /v2/batch/scrape/{id}`
+
+v2 别名（为兼容文档/SDK 的 `start/status` 形态，FCAM 会自动重写到主路径并在必要时回退）：
+- `POST /v2/crawl/start` ↔ `POST /v2/crawl`
+- `GET  /v2/crawl/status/{id}` ↔ `GET /v2/crawl/{id}`
+- `POST /v2/batch/scrape/start` ↔ `POST /v2/batch/scrape`
+- `GET  /v2/batch/scrape/status/{id}` ↔ `GET /v2/batch/scrape/{id}`
+
 注意：
 - 鉴权仍然是 `Authorization: Bearer <CLIENT_TOKEN>`（**不是** Firecrawl Key）。
-- 当前兼容层只覆盖上述端点；如 SDK 使用了其它 Firecrawl 能力，请按需在 FCAM 补齐或在业务侧改用直接 HTTP 调用 `/api/*`。
+- v1 兼容层当前只覆盖上述端点；v2 兼容层为 `/v2/*` 透明转发（除少量别名重写外）。
 
 ### 4.2 scrape（单次抓取，通常同步返回）
 
 - `POST /api/scrape`
-- 上游：`POST {base_url}/scrape`
+- 上游：`POST {base_url}/v1/scrape`
 
 最小示例（PowerShell，payload 字段以 Firecrawl 为准）：
 ```powershell
@@ -193,7 +210,7 @@ Invoke-RestMethod -Method POST -Uri "$origin/api/crawl" -Headers $h -ContentType
 ### 4.4 agent（智能 Agent，强烈建议幂等）
 
 - `POST /api/agent`
-- 上游：`POST {base_url}/agent`
+- 上游：`POST {base_url}/v1/agent`
 
 建议：
 - 业务侧强制传 `X-Idempotency-Key`（避免重复创建/重复扣费风险）。
@@ -211,7 +228,7 @@ Invoke-RestMethod -Method POST -Uri "$origin/api/crawl" -Headers $h -ContentType
 
 运行：
 ```bash
-pytest -q tests/test_api_data_plane.py
+pytest -q tests/integration/test_api_data_plane.py
 ```
 
 ### 5.2 UI 内的“数据面自检（/api/scrape）”（端到端但不自动保存 Client Token）
@@ -236,7 +253,7 @@ pytest -q tests/test_api_data_plane.py
 
 ```powershell
 $env:FCAM_E2E="1"
-& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/e2e/test_e2e_real_api.py"
 ```
 
 如需验证“真实上游链路”（会真实调用 Firecrawl，请仅在隔离环境执行）：
@@ -244,7 +261,7 @@ $env:FCAM_E2E="1"
 $env:FCAM_E2E="1"
 $env:FCAM_E2E_ALLOW_UPSTREAM="1"
 $env:FCAM_E2E_FIRECRAWL_API_KEY="<your_firecrawl_api_key>"
-& ".venv/Scripts/python.exe" -m pytest -q "tests/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
+& ".venv/Scripts/python.exe" -m pytest -q "tests/e2e/test_e2e_real_api.py::test_e2e_firecrawl_compat_scrape_success_with_real_upstream"
 ```
 
 如不想在命令行暴露 key，可在仓库根目录创建本地文件 `.env.e2e`（已被 `.gitignore` 忽略），写入：

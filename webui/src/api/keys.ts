@@ -125,6 +125,49 @@ export type TestKeyResponse = {
 };
 
 export async function testKey(keyId: number, payload?: TestKeyRequest) {
-  const res = await http.post<TestKeyResponse>(`/admin/keys/${keyId}/test`, payload || {});
+  const res = await http.post<TestKeyResponse>(`/admin/keys/${keyId}/test`, payload || {}, { timeout: 60_000 });
+  return res.data;
+}
+
+export type BatchKeyPatch = {
+  name?: string | null;
+  plan_type?: string | null;
+  daily_quota?: number | null;
+  max_concurrent?: number | null;
+  rate_limit_per_min?: number | null;
+  is_active?: boolean | null;
+};
+
+export type BatchKeyTest = {
+  mode?: string;
+  test_url?: string;
+};
+
+export type BatchKeysRequest = {
+  ids: number[];
+  patch?: BatchKeyPatch;
+  reset_cooldown?: boolean;
+  soft_delete?: boolean;
+  test?: BatchKeyTest;
+};
+
+export type BatchKeysResultItem = {
+  id: number;
+  ok: boolean;
+  key?: KeyItem;
+  test?: { ok: boolean; upstream_status_code: number | null; latency_ms: number | null } | null;
+  error?: { code: string; message: string };
+};
+
+export type BatchKeysResponse = {
+  requested: number;
+  succeeded: number;
+  failed: number;
+  results: BatchKeysResultItem[];
+};
+
+export async function batchKeys(payload: BatchKeysRequest) {
+  const timeout = payload.test ? 120_000 : undefined;
+  const res = await http.post<BatchKeysResponse>("/admin/keys/batch", payload, timeout ? { timeout } : undefined);
   return res.data;
 }

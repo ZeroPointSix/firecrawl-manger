@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from cryptography.exceptions import InvalidTag
@@ -44,6 +45,8 @@ _DROP_REQUEST_HEADERS = {
 _DROP_RESPONSE_HEADERS = {
     "connection",
     "keep-alive",
+    "content-encoding",
+    "content-length",
     "proxy-authenticate",
     "proxy-authorization",
     "te",
@@ -69,6 +72,25 @@ class KeyTestResult:
     latency_ms: int
     observed_status: str
     observed_cooldown_until: datetime | None
+
+
+def _strip_firecrawl_version_suffix(base_url: str) -> tuple[str, str | None]:
+    normalized = base_url.rstrip("/")
+    parts = urlsplit(normalized)
+    if not parts.scheme or not parts.netloc:
+        return normalized, None
+
+    path = parts.path.rstrip("/")
+    version: str | None = None
+    if path.endswith("/v1"):
+        version = "v1"
+        path = path[:-3]
+    elif path.endswith("/v2"):
+        version = "v2"
+        path = path[:-3]
+
+    stripped = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
+    return stripped.rstrip("/"), version
 
 
 def _parse_retry_after(headers: httpx.Headers) -> int | None:
@@ -120,6 +142,9 @@ class Forwarder:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         self._config = config
+        self._firecrawl_upstream_base_url, self._firecrawl_upstream_version = _strip_firecrawl_version_suffix(
+            self._config.firecrawl.base_url
+        )
         self._master_key = derive_master_key_bytes(secrets.master_key) if secrets.master_key else None
         self._key_pool = key_pool
         self._key_concurrency = key_concurrency
@@ -173,7 +198,7 @@ class Forwarder:
 
         with httpx.Client(
             timeout=timeout,
-            base_url=self._config.firecrawl.base_url,
+            base_url=self._firecrawl_upstream_base_url,
             transport=self._transport,
             follow_redirects=False,
         ) as client_http:
@@ -251,6 +276,13 @@ class Forwarder:
                             status_code=504,
                             code="UPSTREAM_TIMEOUT",
                             message="Upstream timeout",
+                            details={
+                                "base_url": self._config.firecrawl.base_url,
+                                "timeout_s": self._config.firecrawl.timeout,
+                                "attempts": total_attempts,
+                                "method": method,
+                                "upstream_path": upstream_path,
+                            },
                         ) from exc
                     continue
 
@@ -267,6 +299,13 @@ class Forwarder:
                             status_code=503,
                             code="UPSTREAM_UNAVAILABLE",
                             message="Upstream unavailable",
+                            details={
+                                "base_url": self._config.firecrawl.base_url,
+                                "attempts": total_attempts,
+                                "method": method,
+                                "upstream_path": upstream_path,
+                                "error": str(exc),
+                            },
                         ) from exc
                     continue
 
@@ -325,8 +364,28 @@ class Forwarder:
                 status_code=503,
                 code="ALL_KEYS_BUSY",
                 message="All keys busy or rate-limited",
+                details={
+                    "client_id": client.id,
+                    "base_url": self._config.firecrawl.base_url,
+                    "attempts": total_attempts,
+                    "method": method,
+                    "upstream_path": upstream_path,
+                },
             )
-        raise FcamError(status_code=503, code="UPSTREAM_UNAVAILABLE", message="Upstream unavailable")
+        raise FcamError(
+            status_code=503,
+            code="UPSTREAM_UNAVAILABLE",
+            message="Upstream unavailable",
+            details={
+                "client_id": client.id,
+                "base_url": self._config.firecrawl.base_url,
+                "attempts": total_attempts,
+                "method": method,
+                "upstream_path": upstream_path,
+                "last_upstream_status_code": last_upstream_status,
+                "last_api_key_id": last_api_key_id,
+            },
+        )
 
     def test_key(
         self,
@@ -366,16 +425,27 @@ class Forwarder:
 
             with httpx.Client(
                 timeout=timeout,
-                base_url=self._config.firecrawl.base_url,
+                base_url=self._firecrawl_upstream_base_url,
                 transport=self._transport,
                 follow_redirects=False,
             ) as client_http:
-                resp = client_http.request(
-                    method="POST",
-                    url="/scrape",
-                    headers=upstream_headers,
-                    json={"url": test_url},
-                )
+                candidates = ["/v2/scrape", "/v1/scrape"]
+                if self._firecrawl_upstream_version == "v1":
+                    candidates = ["/v1/scrape", "/v2/scrape"]
+                elif self._firecrawl_upstream_version == "v2":
+                    candidates = ["/v2/scrape", "/v1/scrape"]
+
+                resp: httpx.Response | None = None
+                for candidate_path in candidates:
+                    resp = client_http.request(
+                        method="POST",
+                        url=candidate_path,
+                        headers=upstream_headers,
+                        json={"url": test_url},
+                    )
+                    if resp.status_code not in {404, 405}:
+                        break
+                assert resp is not None
 
             latency_ms = int((perf_counter() - start) * 1000)
 
@@ -553,6 +623,8 @@ class Forwarder:
             logger.exception("db.key_active_update_failed", extra={"fields": {"api_key_id": key.id}})
 
     def _mark_cooling(self, db: Session, key: ApiKey, cooldown_seconds: int) -> None:
+        if not key.is_active or key.status == "disabled":
+            return
         try:
             key.status = "cooling"
             key.cooldown_until = datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)
@@ -588,6 +660,8 @@ class Forwarder:
             logger.exception("db.key_disable_failed", extra={"fields": {"api_key_id": key.id}})
 
     def _record_failure(self, db: Session, key: ApiKey, reason: str) -> None:
+        if not key.is_active or key.status == "disabled":
+            return
         now = datetime.now(timezone.utc)
         with self._failure_lock:
             count, first_at = self._failures.get(key.id, (0, now))

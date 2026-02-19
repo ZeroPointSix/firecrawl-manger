@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, Secrets
@@ -11,6 +12,8 @@ from app.core.security import derive_master_key_bytes, encrypt_api_key, hmac_sha
 from app.core.time import today_in_timezone
 from app.db.models import ApiKey, Base, Client
 from app.main import create_app
+
+pytestmark = pytest.mark.integration
 
 
 def test_metrics_endpoint_disabled_by_default(tmp_path):

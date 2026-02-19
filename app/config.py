@@ -18,7 +18,7 @@ class ServerConfig(BaseModel):
 
 
 class FirecrawlConfig(BaseModel):
-    base_url: str = "https://api.firecrawl.dev/v1"
+    base_url: str = "https://api.firecrawl.dev"
     timeout: int = 30
     max_retries: int = 3
     failure_threshold: int = 3
@@ -27,11 +27,11 @@ class FirecrawlConfig(BaseModel):
 
     @field_validator("base_url")
     @classmethod
-    def _base_url_must_include_v1(cls, v: str) -> str:
-        normalized = v.rstrip("/")
-        if not normalized.endswith("/v1"):
-            raise ValueError("firecrawl.base_url 必须包含 /v1（例如 https://api.firecrawl.dev/v1）")
-        return normalized
+    def _normalize_base_url(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("firecrawl.base_url 不能为空")
+        return normalized.rstrip("/")
 
 
 class ClientAuthConfig(BaseModel):
@@ -49,7 +49,9 @@ class KeyEncryptionConfig(BaseModel):
 
 class RequestLimitsConfig(BaseModel):
     max_body_bytes: int = 1_048_576
-    allowed_paths: list[str] = Field(default_factory=lambda: ["scrape", "crawl", "search", "agent"])
+    allowed_paths: list[str] = Field(
+        default_factory=lambda: ["scrape", "crawl", "search", "agent", "map", "extract", "batch"]
+    )
 
 
 class SecurityConfig(BaseModel):
@@ -112,6 +114,10 @@ class StateConfig(BaseModel):
     redis: RedisConfig = Field(default_factory=RedisConfig)
 
 
+class ControlPlaneConfig(BaseModel):
+    batch_key_test_max_workers: int = 10
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
@@ -123,6 +129,7 @@ class AppConfig(BaseModel):
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     state: StateConfig = Field(default_factory=StateConfig)
+    control_plane: ControlPlaneConfig = Field(default_factory=ControlPlaneConfig)
 
 
 class Secrets(BaseModel):

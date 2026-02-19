@@ -20,6 +20,7 @@ from app.core.time import today_in_timezone
 from app.db.models import ApiKey, Base, Client, IdempotencyRecord, RequestLog
 from app.main import create_app
 
+pytestmark = pytest.mark.integration
 
 _ENDPOINT_CASES = [
     ("POST", "/api/scrape", "/v1/scrape"),
@@ -37,11 +38,30 @@ _COMPAT_ENDPOINT_CASES = [
     ("POST", "/v1/agent", "/v1/agent"),
 ]
 
+_V2_ENDPOINT_CASES = [
+    ("POST", "/v2/scrape", "/v2/scrape"),
+    ("POST", "/v2/crawl", "/v2/crawl"),
+    ("GET", "/v2/crawl/abc123", "/v2/crawl/abc123"),
+    ("POST", "/v2/search", "/v2/search"),
+    ("POST", "/v2/agent", "/v2/agent"),
+    ("POST", "/v2/map", "/v2/map"),
+    ("POST", "/v2/extract", "/v2/extract"),
+    ("POST", "/v2/batch/scrape", "/v2/batch/scrape"),
+    # alias rewrites (start/status -> canonical)
+    ("POST", "/v2/crawl/start", "/v2/crawl"),
+    ("GET", "/v2/crawl/status/abc123", "/v2/crawl/abc123"),
+    ("POST", "/v2/batch/scrape/start", "/v2/batch/scrape"),
+    ("GET", "/v2/batch/scrape/status/abc123", "/v2/batch/scrape/abc123"),
+]
+
 
 def _make_app(tmp_path, *, handler):
     config = AppConfig()
     config.database.path = (tmp_path / "api.db").as_posix()
     config.firecrawl.base_url = "http://firecrawl.test/v1"
+    config.security.request_limits.allowed_paths = sorted(
+        {*(config.security.request_limits.allowed_paths or []), "map", "extract", "batch"}
+    )
     secrets = Secrets(admin_token="admin", master_key="master")
     app = create_app(config=config, secrets=secrets)
     Base.metadata.create_all(app.state.db_engine)
@@ -206,6 +226,34 @@ def test_api_endpoints_forward_to_expected_upstream(tmp_path, method: str, path:
     _COMPAT_ENDPOINT_CASES,
 )
 def test_firecrawl_compat_endpoints_forward_to_expected_upstream(
+    tmp_path, method: str, path: str, expected_upstream_path: str
+):
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["method"] = request.method
+        seen["path"] = request.url.path
+        return httpx.Response(200, json={"ok": True})
+
+    app, token = _make_app(tmp_path, handler=handler)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app) as client:
+        if method == "GET":
+            resp = client.get(path, headers=headers)
+        else:
+            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+
+    assert resp.status_code == 200
+    assert seen["method"] == method
+    assert seen["path"] == expected_upstream_path
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "expected_upstream_path"),
+    _V2_ENDPOINT_CASES,
+)
+def test_firecrawl_v2_compat_endpoints_forward_to_expected_upstream(
     tmp_path, method: str, path: str, expected_upstream_path: str
 ):
     seen: dict[str, str] = {}

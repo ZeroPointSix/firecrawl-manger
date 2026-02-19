@@ -25,7 +25,7 @@ import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from "v
 
 import { createClient, fetchClients, rotateClientToken, updateClient, type ClientItem } from "@/api/clients";
 import { fetchEncryptionStatus, type EncryptionStatus } from "@/api/dashboard";
-import { createKey, fetchKeys, importKeysText, purgeKey, testKey, updateKey, type KeyItem } from "@/api/keys";
+import { batchKeys, createKey, fetchKeys, importKeysText, purgeKey, testKey, updateKey, type KeyItem } from "@/api/keys";
 import { getFcamErrorMessage } from "@/api/http";
 import { adminToken, verifyAdminToken } from "@/state/adminAuth";
 
@@ -494,6 +494,11 @@ const statusTagType = (status: string) => {
   return "default";
 };
 
+const activeOptions = [
+  { label: "启用", value: "true" },
+  { label: "禁用", value: "false" },
+];
+
 const mutating = ref(false);
 const purgingSelected = ref(false);
 
@@ -570,6 +575,268 @@ async function onPurgeSelected() {
       }
     },
   });
+}
+
+// ---- Batch edit Keys modal ----
+const showBatchEditKeys = ref(false);
+const batchApplying = ref(false);
+const batchResult = ref<Awaited<ReturnType<typeof batchKeys>> | null>(null);
+const batchForm = reactive({
+  enable_is_active: false,
+  is_active: "true",
+  enable_plan_type: false,
+  plan_type: "free",
+  enable_daily_quota: false,
+  daily_quota: 5,
+  enable_max_concurrent: false,
+  max_concurrent: 2,
+  enable_rate_limit_per_min: false,
+  rate_limit_per_min: 10,
+  reset_cooldown: false,
+  soft_delete: false,
+  run_test: false,
+  test_url: "https://example.com",
+});
+
+function openBatchEditKeys() {
+  if (!checkedKeyRowKeys.value.length) return;
+  batchResult.value = null;
+  showBatchEditKeys.value = true;
+}
+
+watch(showBatchEditKeys, (v) => {
+  if (v) return;
+  batchApplying.value = false;
+  batchResult.value = null;
+  batchForm.enable_is_active = false;
+  batchForm.is_active = "true";
+  batchForm.enable_plan_type = false;
+  batchForm.plan_type = "free";
+  batchForm.enable_daily_quota = false;
+  batchForm.daily_quota = 5;
+  batchForm.enable_max_concurrent = false;
+  batchForm.max_concurrent = 2;
+  batchForm.enable_rate_limit_per_min = false;
+  batchForm.rate_limit_per_min = 10;
+  batchForm.reset_cooldown = false;
+  batchForm.soft_delete = false;
+  batchForm.run_test = false;
+  batchForm.test_url = "https://example.com";
+});
+
+watch(
+  () => batchForm.soft_delete,
+  (v) => {
+    if (!v) return;
+    batchForm.enable_is_active = false;
+    batchForm.is_active = "false";
+  }
+);
+
+const batchTestSummary = computed(() => {
+  const res = batchResult.value;
+  if (!res) return null;
+  let ok = 0;
+  let failed = 0;
+  let skipped = 0;
+  for (const r of res.results || []) {
+    if (!r.ok) continue;
+    if (!("test" in r) || r.test == null) {
+      skipped += 1;
+      continue;
+    }
+    if (r.test.ok) ok += 1;
+    else failed += 1;
+  }
+  return { ok, failed, skipped };
+});
+
+const batchResultRows = computed(() => {
+  const res = batchResult.value;
+  if (!res) return [];
+  return (res.results || []).map((r) => ({
+    id: r.id,
+    ok: r.ok,
+    api_key_masked: r.key?.api_key_masked || "-",
+    status: r.key?.status || "-",
+    cooldown_until: r.key?.cooldown_until || null,
+    upstream_status_code: r.test?.upstream_status_code ?? null,
+    latency_ms: r.test?.latency_ms ?? null,
+    test_ok: r.test?.ok ?? null,
+    error: r.ok ? null : `${r.error?.code || "ERROR"}: ${r.error?.message || "-"}`,
+  }));
+});
+
+const batchResultColumns = [
+  { title: "id", key: "id", width: 80 },
+  {
+    title: "Key",
+    key: "api_key_masked",
+    width: 140,
+    render: (row: any) => h("span", { class: "mono" }, row.api_key_masked),
+  },
+  {
+    title: "ok",
+    key: "ok",
+    width: 70,
+    render: (row: any) =>
+      h(
+        NTag,
+        { size: "small", type: row.ok ? ("success" as any) : ("error" as any) },
+        { default: () => (row.ok ? "OK" : "ERR") }
+      ),
+  },
+  {
+    title: "status",
+    key: "status",
+    width: 120,
+    render: (row: any) =>
+      h(NTag, { size: "small", type: statusTagType(row.status) as any }, { default: () => row.status }),
+  },
+  {
+    title: "cooldown",
+    key: "cooldown_until",
+    width: 170,
+    render: (row: any) => row.cooldown_until || "-",
+  },
+  {
+    title: "upstream",
+    key: "upstream_status_code",
+    width: 100,
+    render: (row: any) => (row.upstream_status_code == null ? "-" : String(row.upstream_status_code)),
+  },
+  {
+    title: "latency",
+    key: "latency_ms",
+    width: 90,
+    render: (row: any) => (row.latency_ms == null ? "-" : `${row.latency_ms}ms`),
+  },
+  {
+    title: "error",
+    key: "error",
+    render: (row: any) => row.error || "-",
+  },
+];
+
+async function submitBatchEditKeys() {
+  const ids = checkedKeyRowKeys.value.slice();
+  if (!ids.length) return;
+  if (batchApplying.value) return;
+
+  const patch: Record<string, any> = {};
+  if (!batchForm.soft_delete && batchForm.enable_is_active) patch.is_active = batchForm.is_active === "true";
+  if (batchForm.enable_plan_type) patch.plan_type = batchForm.plan_type;
+  if (batchForm.enable_daily_quota) patch.daily_quota = batchForm.daily_quota;
+  if (batchForm.enable_max_concurrent) patch.max_concurrent = batchForm.max_concurrent;
+  if (batchForm.enable_rate_limit_per_min) patch.rate_limit_per_min = batchForm.rate_limit_per_min;
+
+  const hasPatch = Object.keys(patch).length > 0;
+  const hasAnyOp = hasPatch || batchForm.reset_cooldown || batchForm.soft_delete || batchForm.run_test;
+  if (!hasAnyOp) {
+    message.warning("请选择至少一项批量操作");
+    return;
+  }
+
+  batchApplying.value = true;
+  batchResult.value = null;
+  try {
+    const payload: any = {
+      ids,
+      reset_cooldown: batchForm.reset_cooldown,
+      soft_delete: batchForm.soft_delete,
+    };
+    if (hasPatch) payload.patch = patch;
+    if (batchForm.run_test) {
+      payload.test = { mode: "scrape", test_url: batchForm.test_url.trim() || "https://example.com" };
+    }
+
+    const res = await batchKeys(payload);
+    batchResult.value = res;
+    if (res.failed) message.warning(`批量操作完成：succeeded=${res.succeeded} failed=${res.failed}`, { duration: 6000 });
+    else message.success(`批量操作完成：succeeded=${res.succeeded}`);
+    await loadKeys();
+  } catch (err: unknown) {
+    message.error(getFcamErrorMessage(err), { duration: 5000 });
+  } finally {
+    batchApplying.value = false;
+  }
+}
+
+// ---- Edit Key modal ----
+const showEditKey = ref(false);
+const savingKey = ref(false);
+const editForm = reactive({
+  keyId: null as number | null,
+  api_key_masked: "",
+  name: "" as string,
+  plan_type: "free",
+  daily_quota: 5,
+  max_concurrent: 2,
+  rate_limit_per_min: 10,
+  is_active: true,
+  test_url: "https://example.com",
+});
+const editTestResult = ref<Awaited<ReturnType<typeof testKey>> | null>(null);
+
+function openEditKey(row: KeyItem) {
+  editForm.keyId = row.id;
+  editForm.api_key_masked = row.api_key_masked;
+  editForm.name = row.name || "";
+  editForm.plan_type = row.plan_type || "free";
+  editForm.daily_quota = row.daily_quota ?? 5;
+  editForm.max_concurrent = row.max_concurrent ?? 2;
+  editForm.rate_limit_per_min = row.rate_limit_per_min ?? 10;
+  editForm.is_active = Boolean(row.is_active);
+  editForm.test_url = "https://example.com";
+  editTestResult.value = null;
+  showEditKey.value = true;
+}
+
+watch(showEditKey, (v) => {
+  if (v) return;
+  editForm.keyId = null;
+  editForm.api_key_masked = "";
+  editForm.name = "";
+  editForm.plan_type = "free";
+  editForm.daily_quota = 5;
+  editForm.max_concurrent = 2;
+  editForm.rate_limit_per_min = 10;
+  editForm.is_active = true;
+  editForm.test_url = "https://example.com";
+  editTestResult.value = null;
+});
+
+async function submitEditKey(opts: { testAfterSave: boolean }) {
+  if (!editForm.keyId) return;
+  savingKey.value = true;
+  try {
+    await updateKey(editForm.keyId, {
+      name: editForm.name.trim() ? editForm.name.trim() : null,
+      plan_type: editForm.plan_type,
+      daily_quota: editForm.daily_quota,
+      max_concurrent: editForm.max_concurrent,
+      rate_limit_per_min: editForm.rate_limit_per_min,
+      is_active: editForm.is_active,
+    });
+
+    if (!opts.testAfterSave) {
+      message.success("Key 已更新");
+      showEditKey.value = false;
+      await loadKeys();
+      return;
+    }
+
+    const testUrl = editForm.test_url.trim() || "https://example.com";
+    const res = await testKey(editForm.keyId, { mode: "scrape", test_url: testUrl });
+    editTestResult.value = res;
+    if (res.ok) message.success(`保存并测试成功：upstream_status=${res.upstream_status_code ?? "-"}`);
+    else message.warning(`保存完成，测试失败：upstream_status=${res.upstream_status_code ?? "-"}`);
+    await loadKeys();
+  } catch (err: unknown) {
+    message.error(getFcamErrorMessage(err), { duration: 5000 });
+  } finally {
+    savingKey.value = false;
+  }
 }
 
 // ---- Rotate Key modal ----
@@ -746,6 +1013,7 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
           trigger: "click",
           options: [
             { label: "测试", key: "test" },
+            { label: "编辑", key: "edit" },
             { label: row.is_active ? "禁用" : "启用", key: "toggle" },
             { label: "轮换", key: "rotate" },
             { type: "divider", key: "d1" } as any,
@@ -753,6 +1021,7 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
           ] as any,
           onSelect: (action: string) => {
             if (action === "test") openTestKey(row);
+            if (action === "edit") openEditKey(row);
             if (action === "toggle") void onToggleKeyActive(row);
             if (action === "rotate") openRotateKey(row);
             if (action === "purge") void onPurgeKey(row);
@@ -941,13 +1210,21 @@ function rowKey(row: KeyItem) {
                 <n-button type="primary" size="small" @click="showCreateKey = true">添加 Key</n-button>
                 <n-button size="small" @click="showImportKeys = true">文本导入</n-button>
                 <n-button
+                  size="small"
+                  :disabled="!checkedKeyRowKeys.length"
+                  :loading="batchApplying"
+                  @click="openBatchEditKeys"
+                >
+                  批量编辑（{{ checkedKeyRowKeys.length }}）
+                </n-button>
+                <n-button
                   type="error"
                   size="small"
                   :disabled="!checkedKeyRowKeys.length"
                   :loading="purgingSelected"
                   @click="onPurgeSelected"
                 >
-                  删除所选（{{ checkedKeyRowKeys.length }}）
+                  永久删除所选（{{ checkedKeyRowKeys.length }}）
                 </n-button>
                 <n-input
                   v-model:value="keyNameSearch"
@@ -1136,6 +1413,170 @@ function rowKey(row: KeyItem) {
       </n-card>
     </n-modal>
 
+    <n-modal v-model:show="showBatchEditKeys" preset="card" style="max-width: 720px">
+      <n-card title="批量编辑 Keys" :bordered="false">
+        <n-space vertical>
+          <n-alert type="info" title="已选择 Keys">
+            已选择 <span class="mono">{{ checkedKeyRowKeys.length }}</span> 条 Key（尽力而为，允许部分失败）。
+          </n-alert>
+
+          <n-form label-placement="top" :model="batchForm">
+            <n-form-item label="批量启用/禁用">
+              <n-space align="center" wrap>
+                <n-checkbox v-model:checked="batchForm.enable_is_active" :disabled="batchForm.soft_delete">
+                  修改
+                </n-checkbox>
+                <n-select
+                  v-model:value="batchForm.is_active"
+                  size="small"
+                  style="min-width: 140px"
+                  :disabled="!batchForm.enable_is_active || batchForm.soft_delete"
+                  :options="activeOptions as any"
+                />
+                <span v-if="batchForm.soft_delete" class="muted" style="font-size: 12px">
+                  已选择“软删除”，此处不可用
+                </span>
+              </n-space>
+            </n-form-item>
+
+            <n-form-item label="批量修改配置">
+              <n-space wrap>
+                <n-space align="center">
+                  <n-checkbox v-model:checked="batchForm.enable_plan_type">plan_type</n-checkbox>
+                  <n-select
+                    v-model:value="batchForm.plan_type"
+                    size="small"
+                    style="min-width: 140px"
+                    :disabled="!batchForm.enable_plan_type"
+                    :options="planOptions"
+                  />
+                </n-space>
+
+                <n-space align="center">
+                  <n-checkbox v-model:checked="batchForm.enable_daily_quota">daily_quota</n-checkbox>
+                  <n-input-number v-model:value="batchForm.daily_quota" :disabled="!batchForm.enable_daily_quota" />
+                </n-space>
+
+                <n-space align="center">
+                  <n-checkbox v-model:checked="batchForm.enable_max_concurrent">max_concurrent</n-checkbox>
+                  <n-input-number
+                    v-model:value="batchForm.max_concurrent"
+                    :disabled="!batchForm.enable_max_concurrent"
+                  />
+                </n-space>
+
+                <n-space align="center">
+                  <n-checkbox v-model:checked="batchForm.enable_rate_limit_per_min">rate_limit_per_min</n-checkbox>
+                  <n-input-number
+                    v-model:value="batchForm.rate_limit_per_min"
+                    :disabled="!batchForm.enable_rate_limit_per_min"
+                  />
+                </n-space>
+              </n-space>
+            </n-form-item>
+
+            <n-form-item label="批量附加操作">
+              <n-space wrap>
+                <n-checkbox v-model:checked="batchForm.reset_cooldown">清除冷却（cooldown_until）</n-checkbox>
+                <n-checkbox v-model:checked="batchForm.soft_delete">软删除（禁用并标记 disabled）</n-checkbox>
+                <n-checkbox v-model:checked="batchForm.run_test">批量测试</n-checkbox>
+              </n-space>
+            </n-form-item>
+
+            <n-form-item v-if="batchForm.run_test" label="test_url（会真实调用上游 scrape）">
+              <n-input v-model:value="batchForm.test_url" placeholder="https://example.com" />
+            </n-form-item>
+          </n-form>
+
+          <n-alert
+            v-if="batchResult"
+            :type="batchResult.failed ? 'warning' : 'success'"
+            :title="`执行结果：requested=${batchResult.requested} succeeded=${batchResult.succeeded} failed=${batchResult.failed}`"
+          >
+            <div v-if="batchTestSummary && (batchTestSummary.ok + batchTestSummary.failed) > 0" class="muted">
+              测试结果：ok={{ batchTestSummary.ok }} failed={{ batchTestSummary.failed }}
+            </div>
+            <div v-if="batchResult.failed" style="margin-top: 8px">
+              <div class="muted" style="font-size: 12px; margin-bottom: 6px">失败列表（最多显示前 20 条）：</div>
+              <div
+                v-for="(r, idx) in batchResult.results.filter((x) => !x.ok).slice(0, 20)"
+                :key="`${r.id}-${idx}`"
+                class="mono"
+                style="font-size: 12px; margin-top: 4px"
+              >
+                id={{ r.id }} {{ r.error?.code || "ERROR" }}: {{ r.error?.message || "-" }}
+              </div>
+            </div>
+            <n-space style="margin-top: 10px" wrap>
+              <n-button size="tiny" @click="copyText(JSON.stringify(batchResult, null, 2))">复制结果 JSON</n-button>
+            </n-space>
+          </n-alert>
+
+          <n-card v-if="batchResult" size="small" title="详细结果（含测试结果）" style="margin-top: 8px">
+            <n-data-table
+              :columns="batchResultColumns as any"
+              :data="batchResultRows as any"
+              size="small"
+              striped
+              :pagination="false"
+              :scroll-x="1200"
+            />
+          </n-card>
+
+          <n-space justify="end">
+            <n-button :disabled="batchApplying" @click="showBatchEditKeys = false">关闭</n-button>
+            <n-button type="primary" :loading="batchApplying" @click="submitBatchEditKeys">执行</n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
+
+    <n-modal v-model:show="showEditKey" preset="card" style="max-width: 640px">
+      <n-card :title="`编辑 Key（${editForm.api_key_masked || '-' }）`" :bordered="false">
+        <n-space vertical>
+          <n-form label-placement="top" :model="editForm">
+            <n-form-item label="name（可选）">
+              <n-input v-model:value="editForm.name" placeholder="k1" />
+            </n-form-item>
+
+            <n-space wrap>
+              <n-form-item label="plan_type" style="min-width: 140px">
+                <n-select v-model:value="editForm.plan_type" :options="planOptions" />
+              </n-form-item>
+              <n-form-item label="daily_quota" style="min-width: 140px">
+                <n-input-number v-model:value="editForm.daily_quota" />
+              </n-form-item>
+              <n-form-item label="max_concurrent" style="min-width: 160px">
+                <n-input-number v-model:value="editForm.max_concurrent" />
+              </n-form-item>
+              <n-form-item label="rate_limit_per_min" style="min-width: 180px">
+                <n-input-number v-model:value="editForm.rate_limit_per_min" />
+              </n-form-item>
+              <n-form-item label="启用">
+                <n-checkbox v-model:checked="editForm.is_active" />
+              </n-form-item>
+            </n-space>
+
+            <n-form-item label="保存并测试（可选）test_url">
+              <n-input v-model:value="editForm.test_url" placeholder="https://example.com" />
+            </n-form-item>
+          </n-form>
+
+          <n-alert v-if="editTestResult" :type="editTestResult.ok ? 'success' : 'info'" title="测试结果">
+            <pre style="white-space: pre-wrap; margin: 0">{{ JSON.stringify(editTestResult, null, 2) }}</pre>
+          </n-alert>
+
+          <n-space justify="end">
+            <n-button :disabled="savingKey" @click="showEditKey = false">关闭</n-button>
+            <n-button :loading="savingKey" @click="submitEditKey({ testAfterSave: false })">保存</n-button>
+            <n-button type="primary" :loading="savingKey" @click="submitEditKey({ testAfterSave: true })">
+              保存并测试
+            </n-button>
+          </n-space>
+        </n-space>
+      </n-card>
+    </n-modal>
+
     <n-modal v-model:show="showRotateKey" preset="card" style="max-width: 560px">
       <n-card title="轮换 Key（替换上游 api_key）" :bordered="false">
         <n-space vertical>
@@ -1171,6 +1612,13 @@ function rowKey(row: KeyItem) {
           </n-alert>
 
           <n-alert v-if="testResult" :type="testResult.ok ? 'success' : 'info'" title="测试结果">
+            <n-space align="center" justify="space-between" wrap style="margin-bottom: 8px">
+              <div class="muted" style="font-size: 12px">
+                upstream_status={{ testResult.upstream_status_code ?? "-" }} · latency_ms={{ testResult.latency_ms ?? "-" }} ·
+                observed={{ testResult.observed?.status ?? "-" }}
+              </div>
+              <n-button size="tiny" @click="copyText(JSON.stringify(testResult, null, 2))">复制 JSON</n-button>
+            </n-space>
             <pre style="white-space: pre-wrap; margin: 0">{{ JSON.stringify(testResult, null, 2) }}</pre>
           </n-alert>
 

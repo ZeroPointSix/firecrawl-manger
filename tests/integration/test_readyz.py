@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, Secrets
 from app.main import create_app
+
+pytestmark = pytest.mark.integration
 
 
 def test_readyz_reports_missing_secrets(tmp_path):

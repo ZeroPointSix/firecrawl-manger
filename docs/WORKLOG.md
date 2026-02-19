@@ -46,8 +46,8 @@
 - request_logs 落库失败不影响请求返回（仅记录结构化错误日志），避免将“可观测性写入失败”放大为用户面故障。
 
 **本次验证结果**
-- `pytest "tests/test_api_data_plane.py"`：通过（覆盖 `/api/*` 转发映射 + 200/429/5xx/timeout + request_logs 断言）
-- `pytest "tests/test_migrations.py"`：通过（Alembic head 可升级；包含新增列迁移）
+- `pytest "tests/integration/test_api_data_plane.py"`：通过（覆盖 `/api/*` 转发映射 + 200/429/5xx/timeout + request_logs 断言）
+- `pytest "tests/integration/test_migrations.py"`：通过（Alembic head 可升级；包含新增列迁移）
 - `pytest --cov=app --cov-fail-under=80`：通过（60 passed；Total coverage 89.90%）
 
 ### M3：控制面（/admin/*）闭环
@@ -67,7 +67,7 @@
 - `/admin/logs` 的 `error_message` 记录网关错误码（`error.code`），避免引入额外列（YAGNI），同时便于过滤查询。
 
 **本次验证结果**
-- `pytest "tests/test_admin_control_plane.py"`：通过（覆盖 /admin 全链路 + 审计 + 分页/过滤边界）
+- `pytest "tests/integration/test_admin_control_plane.py"`：通过（覆盖 /admin 全链路 + 审计 + 分页/过滤边界）
 - `pytest`：通过（全量回归）
 - `pytest --cov=app --cov-fail-under=80`：通过（69 passed；Total coverage 84.64%）
 
@@ -86,7 +86,7 @@
 - replay 存储采用“headers + body(base64)”打包在 `response_body`，避免新增表结构字段（YAGNI）。
 
 **本次验证结果**
-- `pytest "tests/test_api_data_plane.py"`：通过（新增幂等 replay/冲突/in_progress/强制缺失用例）
+- `pytest "tests/integration/test_api_data_plane.py"`：通过（新增幂等 replay/冲突/in_progress/强制缺失用例）
 
 ### M4：可观测（/metrics）+ 保留策略清理
 
@@ -159,7 +159,7 @@
 - Token 默认不落本地存储（localStorage/sessionStorage），降低误操作导致的长期泄露面（如需持久化再显式扩展）。
 
 **本次验证结果**
-- `pytest "tests/test_ui.py"`：通过（控制面开关覆盖：200 HTML + 静态资源 / 404 NOT_FOUND）
+- `pytest "tests/integration/test_ui2.py"`：通过（控制面开关覆盖：200 HTML + 静态资源 / 404 NOT_FOUND）
 - `pytest --cov=app --cov-fail-under=80`：通过（92 passed；Total coverage 85.32%）
 
 ### M6.1：WebUI 视觉重构（Dashboard 风格）
@@ -177,7 +177,7 @@
 - 仍坚持“不新增 UI 专用后端 API”，所有操作都复用既有 `/admin/*`（保持契约单一事实来源）。
 
 **本次验证结果**
-- `pytest "tests/test_ui2.py"`：通过（含 `/ui/` → 307 跳转断言）
+- `pytest "tests/integration/test_ui2.py"`：通过（含 `/ui/` → 307 跳转断言）
 
 ### M6.2：WebUI 导航布局调整（顶部横向 Tabs）
 
@@ -244,7 +244,7 @@
 - “字段/错误体/分页”等契约细节仍以 `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 为单一事实来源；`docs/API-Usage.md` 只聚焦上手与调用姿势，避免文档漂移。
 
 **本次验证结果**
-- `pytest -q tests/test_api_data_plane.py::test_api_endpoints_forward_to_expected_upstream ...`：通过（MockTransport 模拟上游，覆盖 scrape/crawl/agent 转发路径与幂等行为）
+- `pytest -q tests/integration/test_api_data_plane.py::test_api_endpoints_forward_to_expected_upstream ...`：通过（MockTransport 模拟上游，覆盖 scrape/crawl/agent 转发路径与幂等行为）
 - `pytest --cov=app --cov-fail-under=80`：通过（93 passed；Total coverage 85.32%）
 
 ## 2026-02-12（UTC）
@@ -286,7 +286,7 @@
 **本次验证结果**
 - `cd webui && npm run type-check`：通过
 - `cd webui && npm run build`：通过
-- `pytest "tests/test_admin_control_plane.py::test_admin_logs_query_pagination_and_filters"`：通过
+- `pytest "tests/integration/test_admin_control_plane.py::test_admin_logs_query_pagination_and_filters"`：通过
 
 ### UI2 视觉对齐 gpt-load（配色/组件/布局）
 
@@ -309,7 +309,7 @@
 - `RequestLimitsMiddleware` 的路径白名单从仅 `/api/*` 扩展到同时覆盖 `/v1/*`，避免兼容层绕过 `allowed_paths` 约束。
 
 **本次验证结果**
-- `pytest -q tests/test_middleware.py`：通过
+- `pytest -q tests/integration/test_middleware.py`：通过
 
 ### 可观测一致性：/v1 兼容层请求也写入 request_logs
 
@@ -324,11 +324,11 @@
 ### T1：真实 API E2E 测试（不使用 mock 数据）
 
 **完成内容**
-- 新增 `tests/test_e2e_real_api.py`：测试用例通过 subprocess 启动 uvicorn（真实 HTTP），跑 Alembic 迁移创建空库；通过 `/admin/*` 与数据面（`/api/*`、`/v1/*`）真实调用驱动数据生成与日志落库，再验证 `/admin/logs` 的分页/level/q 行为。
+- 新增 `tests/e2e/test_e2e_real_api.py`：测试用例通过 subprocess 启动 uvicorn（真实 HTTP），跑 Alembic 迁移创建空库；通过 `/admin/*` 与数据面（`/api/*`、`/v1/*`）真实调用驱动数据生成与日志落库，再验证 `/admin/logs` 的分页/level/q 行为。
 - 为避免误触外部上游请求，E2E 默认将 `firecrawl.base_url` 指向本机不可用地址；如需验证真实 Firecrawl 上游链路，建议在独立环境显式覆盖配置并提供真实 key（不写入仓库）。
 
 **运行方式**
-- `FCAM_E2E=1 && pytest "tests/test_e2e_real_api.py"`（需在项目 `.venv` 中执行）
+- `FCAM_E2E=1 && pytest "tests/e2e/test_e2e_real_api.py"`（需在项目 `.venv` 中执行）
 
 ## 2026-02-13（UTC）
 

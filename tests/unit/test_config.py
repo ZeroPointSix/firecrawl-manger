@@ -3,9 +3,10 @@ from __future__ import annotations
 import textwrap
 
 import pytest
-from pydantic import ValidationError
 
 from app.config import load_config
+
+pytestmark = pytest.mark.unit
 
 
 def test_load_config_precedence_yaml_then_env(tmp_path, monkeypatch):
@@ -37,22 +38,33 @@ def test_load_config_precedence_yaml_then_env(tmp_path, monkeypatch):
     assert secrets.master_key == "master_secret"
 
 
-def test_firecrawl_base_url_must_include_v1(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("https://api.firecrawl.dev", "https://api.firecrawl.dev"),
+        ("https://api.firecrawl.dev/", "https://api.firecrawl.dev"),
+        ("https://api.firecrawl.dev/v1", "https://api.firecrawl.dev/v1"),
+        ("https://api.firecrawl.dev/v2/", "https://api.firecrawl.dev/v2"),
+    ],
+)
+def test_firecrawl_base_url_allows_root_and_versions_and_normalizes(tmp_path, monkeypatch, raw: str, expected: str):
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         textwrap.dedent(
             """
             firecrawl:
-              base_url: "https://api.firecrawl.dev"
+              base_url: "{base_url}"
             """
-        ).strip()
+        )
+        .format(base_url=raw)
+        .strip()
         + "\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("FCAM_CONFIG", str(cfg))
 
-    with pytest.raises(ValidationError):
-        load_config()
+    config, _ = load_config()
+    assert config.firecrawl.base_url == expected
 
 
 def test_env_override_type_coercion(tmp_path, monkeypatch):

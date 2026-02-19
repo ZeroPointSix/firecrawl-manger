@@ -2,18 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from alembic import command
 from alembic.config import Config as AlembicConfig
 
 from app.config import AppConfig
 from app.db.session import check_db_ready, create_engine_from_config
 
+pytestmark = pytest.mark.integration
+
 
 def test_alembic_upgrade_head_creates_required_tables(tmp_path, monkeypatch):
     db_path = (tmp_path / "alembic.db").as_posix()
     monkeypatch.setenv("FCAM_DATABASE_URL", f"sqlite:///{db_path}")
 
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     alembic_ini = (repo_root / "alembic.ini").as_posix()
     migrations_dir = (repo_root / "migrations").as_posix()
 

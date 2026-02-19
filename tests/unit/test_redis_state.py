@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import fakeredis
+import pytest
 
 from app.core.concurrency import RedisConcurrencyManager
 from app.core.cooldown import RedisCooldownStore
 from app.core.rate_limit import RedisTokenBucketRateLimiter
+
+pytestmark = pytest.mark.unit
 
 
 def test_redis_concurrency_manager_try_acquire_and_release():

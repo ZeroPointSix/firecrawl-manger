@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
 from app.core.concurrency import ConcurrencyManager
+
+pytestmark = pytest.mark.unit
 
 
 def test_concurrency_manager_try_acquire_and_release():

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import threading
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import AppConfig, Secrets
@@ -13,6 +15,8 @@ from app.core.security import derive_master_key_bytes, encrypt_api_key, hmac_sha
 from app.core.time import today_in_timezone
 from app.db.models import ApiKey, Base, Client, IdempotencyRecord, RequestLog
 from app.main import create_app
+
+pytestmark = pytest.mark.integration
 
 
 def _make_app(tmp_path, *, handler=None):
@@ -196,6 +200,156 @@ def test_admin_keys_list_supports_pagination_and_name_search(tmp_path):
         items = rsearch.json()["items"]
         assert len(items) == 2
         assert all("alpha" in (i["name"] or "").lower() for i in items)
+
+
+def test_admin_keys_batch_best_effort_patch_reset_and_test(tmp_path):
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("authorization")
+        if auth == "Bearer fc-xxxxxxxxxxxxxxxx0001":
+            return httpx.Response(200, json={"ok": True})
+        if auth == "Bearer fc-xxxxxxxxxxxxxxxx0002":
+            return httpx.Response(429, headers={"Retry-After": "1"}, json={"error": "rate"})
+        return httpx.Response(500, json={"error": "unexpected"})
+
+    app, _ = _make_app(tmp_path, handler=handler)
+
+    with TestClient(app) as client:
+        r1 = client.post(
+            "/admin/keys",
+            headers=_admin_headers(),
+            json={
+                "api_key": "fc-xxxxxxxxxxxxxxxx0001",
+                "name": "k1",
+                "plan_type": "free",
+                "daily_quota": 5,
+                "max_concurrent": 2,
+                "rate_limit_per_min": 10,
+                "is_active": True,
+            },
+        )
+        assert r1.status_code == 201
+        k1_id = r1.json()["id"]
+
+        r2 = client.post(
+            "/admin/keys",
+            headers=_admin_headers(),
+            json={
+                "api_key": "fc-xxxxxxxxxxxxxxxx0002",
+                "name": "k2",
+                "plan_type": "free",
+                "daily_quota": 5,
+                "max_concurrent": 2,
+                "rate_limit_per_min": 10,
+                "is_active": True,
+            },
+        )
+        assert r2.status_code == 201
+        k2_id = r2.json()["id"]
+
+        # Pre-condition: put k2 into cooling via test (429)
+        rt0 = client.post(
+            f"/admin/keys/{k2_id}/test",
+            headers=_admin_headers(),
+            json={"mode": "scrape", "test_url": "https://example.com"},
+        )
+        assert rt0.status_code == 200
+        assert rt0.json()["ok"] is False
+
+        rbatch = client.post(
+            "/admin/keys/batch",
+            headers=_admin_headers(),
+            json={
+                "ids": [k1_id, k2_id, 999999],
+                "patch": {"daily_quota": 10, "is_active": False},
+                "reset_cooldown": True,
+                "soft_delete": False,
+                "test": {"mode": "scrape", "test_url": "https://example.com"},
+            },
+        )
+        assert rbatch.status_code == 200
+        body = rbatch.json()
+        assert body["requested"] == 3
+        assert body["succeeded"] == 2
+        assert body["failed"] == 1
+
+        results_by_id = {r["id"]: r for r in body["results"]}
+        assert results_by_id[k1_id]["ok"] is True
+        assert results_by_id[k2_id]["ok"] is True
+        assert results_by_id[999999]["ok"] is False
+        assert results_by_id[999999]["error"]["code"] == "NOT_FOUND"
+
+        rlist = client.get("/admin/keys", headers=_admin_headers())
+        assert rlist.status_code == 200
+        items = {i["id"]: i for i in rlist.json()["items"]}
+        assert items[k1_id]["daily_quota"] == 10
+        assert items[k1_id]["is_active"] is False
+        assert items[k1_id]["status"] == "disabled"
+        assert items[k2_id]["daily_quota"] == 10
+        assert items[k2_id]["is_active"] is False
+        assert items[k2_id]["status"] == "disabled"
+        assert items[k2_id]["cooldown_until"] is None
+
+
+def test_admin_keys_batch_test_runs_concurrently(tmp_path):
+    barrier = threading.Barrier(2)
+    seen_threads: set[int] = set()
+    lock = threading.Lock()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        with lock:
+            seen_threads.add(threading.get_ident())
+        barrier.wait(timeout=5)
+        return httpx.Response(200, json={"ok": True})
+
+    app, _ = _make_app(tmp_path, handler=handler)
+
+    with TestClient(app) as client:
+        r1 = client.post(
+            "/admin/keys",
+            headers=_admin_headers(),
+            json={
+                "api_key": "fc-xxxxxxxxxxxxxxxx0001",
+                "name": "k1",
+                "plan_type": "free",
+                "daily_quota": 5,
+                "max_concurrent": 2,
+                "rate_limit_per_min": 10,
+                "is_active": True,
+            },
+        )
+        assert r1.status_code == 201
+        k1_id = r1.json()["id"]
+
+        r2 = client.post(
+            "/admin/keys",
+            headers=_admin_headers(),
+            json={
+                "api_key": "fc-xxxxxxxxxxxxxxxx0002",
+                "name": "k2",
+                "plan_type": "free",
+                "daily_quota": 5,
+                "max_concurrent": 2,
+                "rate_limit_per_min": 10,
+                "is_active": True,
+            },
+        )
+        assert r2.status_code == 201
+        k2_id = r2.json()["id"]
+
+        rbatch = client.post(
+            "/admin/keys/batch",
+            headers=_admin_headers(),
+            json={"ids": [k1_id, k2_id], "test": {"mode": "scrape", "test_url": "https://example.com"}},
+        )
+        assert rbatch.status_code == 200
+        body = rbatch.json()
+        assert body["requested"] == 2
+        assert body["succeeded"] == 2
+        assert body["failed"] == 0
+        assert all(item["ok"] is True for item in body["results"])
+        assert all(item["test"] is not None for item in body["results"])
+
+    assert len(seen_threads) >= 2
 
 
 def test_admin_clients_create_rotate_disable(tmp_path):

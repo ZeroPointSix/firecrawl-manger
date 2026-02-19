@@ -18,6 +18,11 @@ def _forwarder(request: Request) -> Forwarder:
     return request.app.state.forwarder
 
 
+def _path_and_query(request: Request) -> str:
+    query = request.url.query
+    return f"{request.url.path}?{query}" if query else request.url.path
+
+
 @router.post("/scrape", dependencies=[Depends(enforce_client_governance)])
 def scrape(
     request: Request,
@@ -30,7 +35,7 @@ def scrape(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/scrape",
+        upstream_path=_path_and_query(request),
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -66,7 +71,7 @@ def crawl(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/crawl",
+        upstream_path=_path_and_query(request),
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -88,7 +93,7 @@ def crawl_status(
         request_id=request.state.request_id,
         client=client,
         method="GET",
-        upstream_path=f"/crawl/{crawl_id}",
+        upstream_path=_path_and_query(request),
         json_body=None,
         inbound_headers=dict(request.headers),
     )
@@ -110,7 +115,7 @@ def search(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/search",
+        upstream_path=_path_and_query(request),
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
@@ -146,7 +151,7 @@ def agent(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/agent",
+        upstream_path=_path_and_query(request),
         json_body=payload,
         inbound_headers=dict(request.headers),
     )

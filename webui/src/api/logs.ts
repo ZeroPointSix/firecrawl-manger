@@ -15,6 +15,7 @@ export type RequestLogItem = {
   success: boolean | null;
   retry_count: number;
   error_message: string | null;
+  error_details: string | null;
   idempotency_key: string | null;
 };
 

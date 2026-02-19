@@ -7,8 +7,11 @@ server:
   enable_control_plane: true
 
 firecrawl:
-  # 重要：该 base_url 必须“包含 /v1”，网关转发时只拼接资源路径（见接口契约）
-  base_url: "https://api.firecrawl.dev/v1"
+  # 建议：使用上游 root base url（不包含 /v1 或 /v2），由 FCAM 按入站路径追加版本前缀：
+  # - /api/* 与 /v1/* → 上游 /v1/*
+  # - /v2/*           → 上游 /v2/*
+  # 兼容：也可配置为以 /v1 或 /v2 结尾（FCAM 会自动去重，避免 /v1/v1 或 /v1/v2）
+  base_url: "https://api.firecrawl.dev"
   timeout: 30
   max_retries: 3
   failure_threshold: 3
@@ -25,7 +28,7 @@ security:
     master_key_env: "FCAM_MASTER_KEY"
   request_limits:
     max_body_bytes: 1048576 # 1MB
-    allowed_paths: ["scrape", "crawl", "search", "agent"]
+    allowed_paths: ["scrape", "crawl", "search", "agent", "map", "extract", "batch"]
 
 quota:
   # 文档冻结：quota.timezone=UTC；quota.count_mode=success
@@ -64,3 +67,7 @@ state:
   redis:
     url: "redis://localhost:6379/0"
     key_prefix: "fcam"
+
+control_plane:
+  # 批量 key test 的并发上限（用于避免大量 keys 顺序测试导致请求/前端超时）
+  batch_key_test_max_workers: 10

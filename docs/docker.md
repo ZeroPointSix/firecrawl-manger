@@ -21,6 +21,10 @@
 
 适用：单机/内网/低并发；想快速验证 UI 与接口。
 
+> 提示：`docker-compose.yml` 同时声明了 `image` + `build`：
+> - 你本地开发时可直接 `--build`，默认 tag 为 `guangshanshui/firecrawl-manager:latest`
+> - 远程机器想“只拉镜像不构建”，用 `--no-build`（见下方命令）
+
 ### 1.1 准备 `.env`（推荐）
 
 复制示例并修改机密：
@@ -37,6 +41,16 @@ cp ".env.example" ".env"
 
 ```bash
 docker compose up --build
+```
+
+如你在远程机器上不想/不能从源码构建（推荐）：
+
+```bash
+# 可选：固定版本（例如 v0.1.0）
+export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.0"
+
+docker compose pull
+docker compose up -d --no-build
 ```
 
 默认端口绑定：

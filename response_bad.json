@@ -1,0 +1,1 @@
+{"success":false,"code":"BAD_REQUEST","error":"URL must have a valid top-level domain or be a valid path","details":[{"code":"custom","path":["url"],"message":"URL must have a valid top-level domain or be a valid path"}]}

@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import logging
 
+import pytest
+
 from app.observability.logging import JsonFormatter, PlainFormatter, request_id_ctx
+
+pytestmark = pytest.mark.unit
 
 
 def test_json_formatter_includes_request_id_and_redacts_fields():
