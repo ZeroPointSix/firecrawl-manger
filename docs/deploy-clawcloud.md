@@ -63,10 +63,13 @@ database:
 3) **改用外部数据库**
 - 配置 `FCAM_DATABASE__URL=postgresql+psycopg://...`，避免依赖本地卷写权限。
 
+4) **临时兜底（不持久化）**
+- 如果平台卷始终不可写且你只想先把服务跑起来：镜像会在检测到 `/app/data` 不可写且你未显式配置数据库时，自动降级到 `/tmp/api_manager.db`。
+- 可通过 `FCAM_DB_FALLBACK_TMP=0` 禁用该行为（禁用后会直接启动失败并提示修复方式）。
+
 ---
 
 ## 3. 探活建议（避免被平台误杀）
 
 - **Liveness**：`GET /healthz`（只表示进程存活）
 - **Readiness**：`GET /readyz`（依赖密钥/DB/Redis，表示可接业务）
-
