@@ -31,8 +31,12 @@ COPY scripts /app/scripts
 RUN sed -i 's/\r$//' /app/scripts/entrypoint.sh && chmod +x /app/scripts/entrypoint.sh
 
 RUN mkdir -p "/app/data" && chown -R appuser:appuser "/app"
-
-USER appuser
+# NOTE:
+# Some platforms mount persistent volumes as root-owned and not writable by non-root users.
+# Running as root by default avoids SQLite "unable to open database file" on such platforms.
+# If you want to run as non-root, set a Kubernetes securityContext (runAsUser/fsGroup) or
+# build a custom image.
+USER root
 EXPOSE 8000
 
 CMD ["/bin/sh", "/app/scripts/entrypoint.sh"]

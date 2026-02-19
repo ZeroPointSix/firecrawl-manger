@@ -2,6 +2,7 @@
 
 > 本文关注“怎么跑起来 + 数据库是什么 + 怎么持久化”。  
 > 更完整的接口语义与错误体：`docs/MVP/Firecrawl-API-Manager-API-Contract.md`。
+> ClawCloud Run（免费容器）部署与常见卷权限问题：`docs/deploy-clawcloud.md`。
 
 ## 0. 数据库现在用什么？
 
