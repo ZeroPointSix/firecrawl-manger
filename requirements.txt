@@ -10,6 +10,6 @@ alembic==1.13.1
 httpx==0.27.0
 tenacity==8.3.0
 cryptography==42.0.7
-prometheus-client==0.20.0
+prometheus-client==0.24.1
 redis==5.0.4
 psycopg[binary]==3.2.4
