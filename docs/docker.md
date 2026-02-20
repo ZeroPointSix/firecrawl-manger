@@ -18,6 +18,23 @@
 
 > 说明：镜像启动时会自动执行 `alembic upgrade head`（见 `scripts/entrypoint.sh`）。
 
+## 0.1 镜像 tag 策略（发布口径）
+
+为减少容器云部署的歧义，本项目约定：
+
+- **`latest` 永远等价于 onebox（单容器单端口，UI+API 同端口）**  
+  即：你看到的 `guangshanshui/firecrawl-manager:latest` 就是 onebox 形态，不需要额外说明。
+
+同时，为避免线上使用 `latest` 发生“无感漂移”，建议按以下约定使用：
+
+- 固定发布 tag（推荐生产/容器云使用）：
+  - `guangshanshui/firecrawl-manager:vX.Y.Z`
+  - `guangshanshui/firecrawl-manager:vX.Y.Z-onebox`（UI+API 同端口，容器云更省心）
+- 滚动 tag（仅开发/试用；语义与 `latest` 相同）：
+  - `guangshanshui/firecrawl-manager:onebox`
+
+> ClawCloud 推荐用 onebox 固定版本：例如 `guangshanshui/firecrawl-manager:v0.1.7-onebox`。
+
 ---
 
 ## 1. MVP（单容器 + SQLite，最省事）
@@ -49,8 +66,8 @@ docker compose up --build
 如你在远程机器上不想/不能从源码构建（推荐）：
 
 ```bash
-# 可选：固定版本（例如 v0.1.7）
-export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.7"
+# 可选：固定版本（例如 v0.1.7-onebox；容器云更推荐 onebox）
+export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.7-onebox"
 
 docker compose pull
 docker compose up -d --no-build

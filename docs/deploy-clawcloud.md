@@ -10,7 +10,11 @@
 
 ### 1.1 镜像
 
-- `guangshanshui/firecrawl-manager:latest`（或固定版本 tag）
+- 推荐固定版本 tag（避免 `latest` 漂移）：
+  - `guangshanshui/firecrawl-manager:v0.1.7-onebox`（推荐：onebox 单端口，UI+API 同端口）
+  - （或）`guangshanshui/firecrawl-manager:v0.1.7`
+
+> 约定：`guangshanshui/firecrawl-manager:latest` 永远等价于 onebox（单容器单端口）；但线上仍建议固定版本。
 
 ### 1.2 环境变量
 
@@ -64,6 +68,13 @@ database:
 - 如只为先把服务跑起来：把 SQLite 放到 `/tmp`（容器本地可写层）
   - `FCAM_DATABASE_URL=sqlite:////tmp/api_manager.db`
   - `FCAM_DATABASE__PATH=/tmp/api_manager.db`
+
+---
+
+## 4. onebox（单端口）说明：/ui2 与 /api 是否在同一端口？
+
+- **onebox 模式**：UI（`/ui2/`）与 API（`/api/*`）在同一端口（`8000`），最适合容器云减少端口/路由配置错误。
+- 如你需要把控制面与数据面拆到不同端口/不同实例，请参考 `docs/docker.md` 的生产示例（`prod` profile）。
 
 ---
 
