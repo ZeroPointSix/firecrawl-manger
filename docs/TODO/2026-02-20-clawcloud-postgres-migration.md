@@ -84,4 +84,4 @@
 
 - [x] 更新 `docs/deploy-clawcloud.md`：推荐 Postgres + DSN 单变量写法（系统自动 alias），双写作为兼容说明
 - [x] 更新 `docs/docker.md`：同上，避免读者只复制 `FCAM_DATABASE_URL` 导致运行期落回 SQLite
-- [ ] 发布固定 tag（避免 ClawCloud 使用 `latest` 漂移）；Release note 写清迁移工具用法与风险提示
+- [x] 发布固定 tag（避免 ClawCloud 使用 `latest` 漂移）；Release note 写清迁移工具用法与风险提示（Git tag：`v0.1.7`；Docker：`guangshanshui/firecrawl-manager:v0.1.7`）
