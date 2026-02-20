@@ -12,4 +12,4 @@ tenacity==8.3.0
 cryptography==42.0.7
 prometheus-client==0.20.0
 redis==5.0.4
-psycopg[binary]==3.2.4
+psycopg[binary]==3.3.3
