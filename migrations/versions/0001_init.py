@@ -7,8 +7,8 @@ Create Date: 2026-02-10
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0001_init"
 down_revision = None
@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("api_key_last4", sa.String(length=4), nullable=False),
         sa.Column("name", sa.String(length=255), nullable=True),
         sa.Column("plan_type", sa.String(length=32), nullable=False, server_default="free"),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("daily_quota", sa.Integer(), nullable=False, server_default=sa.text("5")),
         sa.Column("daily_usage", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("quota_reset_at", sa.Date(), nullable=True),
@@ -53,7 +53,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column("name", sa.String(length=255), nullable=False, unique=True),
         sa.Column("token_hash", sa.String(length=64), nullable=False, unique=True),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("daily_quota", sa.Integer(), nullable=True),
         sa.Column("daily_usage", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("quota_reset_at", sa.Date(), nullable=True),

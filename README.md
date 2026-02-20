@@ -9,7 +9,8 @@ FCAM 是一个可容器化部署的轻量级 HTTP 网关，用于集中管理多
 - API 使用指南（面向调用方/运维，上手/配置/示例）：`docs/API-Usage.md`
 - 接入方/运维快速手册（接口一览 + 部署要点）：`docs/handbook.md`
 - Docker 部署（MVP/生产示例 + 数据库说明）：`docs/docker.md`
-- 实施代办清单（里程碑顺序）：`docs/project/TD.md`（`docs/project/TODO.md` 仅兼容入口）
+- 实施代办清单（Task List）：`docs/TODO/README.md`
+- 实施计划（Plan）：`docs/PLAN/README.md`
 - 产品需求：`docs/MVP/Firecrawl-API-Manager-PRD.md`
 
 ## 本地开发（不使用 Docker）
@@ -99,10 +100,10 @@ docker volume create fcam_data
 docker run ... -v fcam_data:/app/data ...
 ```
 
-如需固定版本（例如 `v0.1.0`）：
+如需固定版本（例如 `v0.1.7`）：
 
 ```bash
-export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.0"
+export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.7"
 docker compose pull
 docker compose up -d --no-build
 ```

@@ -7,11 +7,11 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse, RedirectResponse
 
-from app.api.health import router as health_router
 from app.api.control_plane import router as control_plane_router
 from app.api.data_plane import router as data_plane_router
 from app.api.firecrawl_compat import router as firecrawl_compat_router
 from app.api.firecrawl_v2_compat import router as firecrawl_v2_compat_router
+from app.api.health import router as health_router
 from app.config import AppConfig, Secrets, load_config
 from app.core.concurrency import ConcurrencyManager, RedisConcurrencyManager
 from app.core.cooldown import NoopCooldownStore, RedisCooldownStore

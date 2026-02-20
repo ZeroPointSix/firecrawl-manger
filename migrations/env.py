@@ -4,11 +4,11 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, text
 
 from app.config import load_config
-from app.db.session import build_database_url
 from app.db.models import Base
+from app.db.session import build_database_url
 
 config = context.config
 
@@ -40,6 +40,44 @@ def _database_url() -> str:
     return build_database_url(cfg)
 
 
+def _ensure_alembic_version_column_capacity(connection) -> None:
+    # Alembic's built-in version table uses VARCHAR(32). Our revision ids are longer
+    # (e.g. "0002_add_retry_count_to_request_logs" is 36 chars), which will fail on Postgres.
+    if connection.dialect.name != "postgresql":
+        return
+
+    row = connection.execute(
+        text(
+            """
+            SELECT character_maximum_length
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'alembic_version'
+              AND column_name = 'version_num'
+            """
+        )
+    ).one_or_none()
+
+    if row is None:
+        # Table doesn't exist yet; create it with a larger column.
+        connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS alembic_version (
+                  version_num VARCHAR(255) NOT NULL PRIMARY KEY
+                )
+                """
+            )
+        )
+        return
+
+    max_len = row[0]
+    if max_len is not None and int(max_len) < 64:
+        connection.execute(
+            text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)")
+        )
+
+
 def run_migrations_offline() -> None:
     url = _database_url()
     context.configure(
@@ -67,6 +105,7 @@ def run_migrations_online() -> None:
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():
+            _ensure_alembic_version_column_capacity(connection)
             context.run_migrations()
 
 

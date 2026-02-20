@@ -129,7 +129,9 @@ def start_or_replay(
             .one_or_none()
         )
         if existing is None:
-            raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable")
+            raise FcamError(
+                status_code=503, code="DB_UNAVAILABLE", message="Database unavailable"
+            ) from None
 
         expires_at = existing.expires_at
         if expires_at and expires_at.tzinfo is None:
@@ -156,7 +158,7 @@ def start_or_replay(
                 status_code=409,
                 code="IDEMPOTENCY_KEY_CONFLICT",
                 message="Idempotency key conflict",
-            )
+            ) from None
 
         if existing.status == "completed" and existing.response_status_code is not None and existing.response_body:
             return None, _deserialize_response(
@@ -169,7 +171,7 @@ def start_or_replay(
             code="IDEMPOTENCY_IN_PROGRESS",
             message="Idempotent request in progress",
             retry_after=1,
-        )
+        ) from None
     except FcamError:
         raise
     except Exception as exc:

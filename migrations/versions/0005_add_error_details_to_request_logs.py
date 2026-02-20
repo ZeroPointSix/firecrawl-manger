@@ -7,8 +7,8 @@ Create Date: 2026-02-17
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0005_add_error_details_to_request_logs"
 down_revision = "0004_add_client_id_to_api_keys"

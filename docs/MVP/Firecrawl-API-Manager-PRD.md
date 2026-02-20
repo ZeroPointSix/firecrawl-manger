@@ -569,6 +569,7 @@ print(response.json())
 - Docker 容器化
 - 支持远程部署（添加认证机制）
 - 多实例负载均衡
+- ClawCloud Run / AppLaunchpad：数据库方案必须采用 Postgres（SQLite 在该平台存在启动迁移失败现象）。详见：`docs/PRD/2026-02-20-clawcloud-sqlite-crashloop-and-postgres-migration.md`
 
 ### 7.3 集成功能
 - 支持其他爬虫 API（ScrapingBee、Apify 等）

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_config, get_db, get_secrets, require_admin
 from app.config import AppConfig, Secrets
+from app.core.key_import import parse_keys_text
 from app.core.security import (
     decrypt_api_key,
     derive_master_key_bytes,
@@ -24,7 +25,6 @@ from app.core.security import (
     hmac_sha256_hex,
     mask_api_key_last4,
 )
-from app.core.key_import import parse_keys_text
 from app.core.time import today_in_timezone
 from app.db.models import ApiKey, AuditLog, Client, IdempotencyRecord, RequestLog
 from app.errors import FcamError
@@ -691,7 +691,7 @@ def batch_keys(
         except FcamError as exc:
             db.rollback()
             results.append({"id": key_id, "ok": False, "error": {"code": exc.code, "message": exc.message}})
-        except Exception as exc:
+        except Exception:
             db.rollback()
             logger.exception("admin.keys_batch_failed", extra={"fields": {"api_key_id": key_id}})
             results.append(

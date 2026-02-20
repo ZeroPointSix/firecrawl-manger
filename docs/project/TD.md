@@ -1,5 +1,8 @@
 # TD（实施代办清单 / Task List）
 
+> **DEPRECATED**：`docs/project/` 目录将逐步废弃；新的执行入口请以 `docs/TODO/README.md`（代办清单）与 `docs/PLAN/README.md`（实施计划）为准。  
+> 本文件仅保留为历史记录与兼容引用，原则上不再增量维护（避免多处事实来源漂移）。
+
 > 适用范围：按 `docs/MVP/Firecrawl-API-Manager-PRD.md` + `docs/agent.md` + `docs/MVP/Firecrawl-API-Manager-API-Contract.md` 落地实现。  
 > 使用方式：从上到下执行；每完成一项就打勾；任何“语义/接口”变更必须同步更新对应文档。
 
@@ -190,3 +193,34 @@ M5 DoD（完成标志）：
 - [x] Admin Token 支持同标签页/本机持久化（可配置过期）并提供一键清空；默认同标签页保存以减少重复输入
 - [x] 测试：控制面开启时 `/ui2/` 返回 HTML；控制面关闭时 `/ui2/` 返回 404；`/ui/` 跳转到 `/ui2/`
 - [x] 文档：`README.md` 增加 `/ui2/` 入口说明；`docs/WORKLOG.md` 记录选择与验证结果
+
+---
+
+## 9. P0：ClawCloud 部署稳定性（SQLite CrashLoop）与 SQLite→Postgres 后端直迁
+
+> 参考文档：  
+> - PRD：`docs/PRD/2026-02-20-clawcloud-sqlite-crashloop-and-postgres-migration.md`  
+> - FD：`docs/FD/2026-02-20-clawcloud-postgres-migration-fd.md`  
+> - TDD：`docs/TDD/2026-02-20-clawcloud-postgres-migration-tdd.md`
+
+### 9.1 启动期 DB 一致性（避免迁移期/运行期错配）
+- [ ] `scripts/entrypoint.sh`：为 `FCAM_DATABASE_URL` 与 `FCAM_DATABASE__URL` 做双向 alias（只配一个 DSN 也能一致）
+- [ ] `scripts/entrypoint.sh`：识别 DB backend（sqlite/postgres），Postgres 模式跳过 `/app/data` 可写性检查
+- [ ] `scripts/entrypoint.sh`：为 `alembic upgrade head` 增加“等待 DB 就绪”的重试（`FCAM_DB_MIGRATE_RETRIES`、`FCAM_DB_MIGRATE_SLEEP_SECONDS`）
+- [ ] `scripts/entrypoint.sh`：补充启动日志（`db.backend/db.source`），DSN 必须脱敏
+- [ ] （建议）`app/config.py`：支持 `FCAM_DATABASE_URL` 映射到 `database.url`（防止绕过 entrypoint 直接跑 uvicorn 时错配）
+- [ ] 文档：更新 `docs/deploy-clawcloud.md`、`docs/docker.md`，把“双写 DSN”从“必须”降级为“兼容写法”（推荐写法 + 自动 alias 说明）
+
+### 9.2 后端直迁工具（SQLite → Postgres）（最高优先级）
+- [ ] 新增迁移命令（推荐）：`python -m app.tools.migrate_sqlite_to_postgres --sqlite-path ... --postgres-url ...`
+- [ ] 支持安全开关：`--dry-run`、`--truncate`、`--include/--exclude`、`--batch-size`、`--verify`
+- [ ] 前置检查：SQLite 可读、Postgres 可连、目标 schema 已 `alembic upgrade head`、目标表为空（除非 `--truncate`）
+- [ ] 迁移顺序与依赖：`clients` → `api_keys` → `idempotency_records` → `request_logs` → `audit_logs`
+- [ ] 保留源 `id`；迁移后对 Postgres 序列执行 `setval(...)` 修正（避免后续插入冲突）
+- [ ] 迁移后校验：行数对比 + 抽样字段校验（密文字段只做长度/非空校验，不解密）
+- [ ] 输出 summary（每表源行数/迁移行数/耗时）与失败时的可行动建议
+
+### 9.3 测试与验收
+- [ ] 单测：env alias 行为（只配 `FCAM_DATABASE_URL` / 只配 `FCAM_DATABASE__URL` 的一致性）
+- [ ] 集成测试：临时 Postgres + 临时 SQLite → 运行迁移工具 → 校验行数、外键一致、序列修正后可继续插入
+- [ ] ClawCloud 验收：Pod 连续运行 ≥ 30 分钟、重启次数 0、`/healthz`=200、`/readyz`=200、最小写入→重启→读回闭环

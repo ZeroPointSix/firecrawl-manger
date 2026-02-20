@@ -166,6 +166,12 @@ def _env_overrides(prefix: str = "FCAM_", nested_delimiter: str = "__") -> dict[
     for key, raw_value in os.environ.items():
         if key in _RESERVED_ENV_KEYS:
             continue
+        if key == "FCAM_DATABASE_URL":
+            # Backward/compat alias: allow a single underscore variant to override database.url.
+            # Prefer the nested form if both are present.
+            if "FCAM_DATABASE__URL" in os.environ:
+                continue
+            key = "FCAM_DATABASE__URL"
         if not key.startswith(prefix):
             continue
 
@@ -186,6 +192,13 @@ def _env_overrides(prefix: str = "FCAM_", nested_delimiter: str = "__") -> dict[
 
 def load_config() -> tuple[AppConfig, Secrets]:
     defaults = AppConfig().model_dump()
+
+    env_db_url = os.environ.get("FCAM_DATABASE_URL")
+    env_db_nested_url = os.environ.get("FCAM_DATABASE__URL")
+    if env_db_url and env_db_nested_url and env_db_url != env_db_nested_url:
+        raise ValueError(
+            "FCAM_DATABASE_URL 与 FCAM_DATABASE__URL 同时设置但不一致；请只设置一个或保持一致。"
+        )
 
     config_path = Path(os.environ.get("FCAM_CONFIG", "config.yaml"))
     yaml_config = _load_yaml_file(config_path)

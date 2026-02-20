@@ -11,7 +11,9 @@
   - 容器内路径：`/app/data/api_manager.db`  
   - 持久化：把宿主机 `./data` 挂载到容器 `/app/data`
 - **生产推荐：Postgres +（可选）Redis**  
-  - 配置：`FCAM_DATABASE__URL=postgresql+psycopg://...`  
+  - 配置：推荐只设置 **一个** DSN（系统会自动做 alias，保证迁移期/运行期一致）  
+    - `FCAM_DATABASE__URL=postgresql+psycopg://...`（推荐）  
+    - （兼容）`FCAM_DATABASE_URL=postgresql+psycopg://...`  
   - 多实例一致性/限流/并发建议配合 `state.mode=redis`
 
 > 说明：镜像启动时会自动执行 `alembic upgrade head`（见 `scripts/entrypoint.sh`）。
@@ -47,8 +49,8 @@ docker compose up --build
 如你在远程机器上不想/不能从源码构建（推荐）：
 
 ```bash
-# 可选：固定版本（例如 v0.1.0）
-export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.0"
+# 可选：固定版本（例如 v0.1.7）
+export FCAM_IMAGE="guangshanshui/firecrawl-manager:v0.1.7"
 
 docker compose pull
 docker compose up -d --no-build
@@ -106,3 +108,39 @@ services:
     environment:
       FCAM_CONFIG: "/app/config.yaml"
 ```
+
+---
+
+## 4. SQLite → Postgres 直迁（一次性工具）
+
+适用：你已有 **本地/单机** 的 SQLite 数据（`./data/api_manager.db`），希望迁移到 Postgres。  
+不适用：ClawCloud 上的 SQLite PVC（不稳定，见 `docs/deploy-clawcloud.md`）。
+
+建议在维护窗口执行（避免源 SQLite 与目标 Postgres 同时写入导致不一致）：
+
+0) 备份源 SQLite 文件，并确保其 schema 已升级到最新（同一份代码版本）：
+
+```bash
+export FCAM_DATABASE_URL="sqlite:///./data/api_manager.db"
+python -m alembic upgrade head
+```
+
+1) 准备 Postgres 空库，并先把 schema 升级到最新：
+
+```bash
+export FCAM_DATABASE_URL="postgresql+psycopg://USER:PASSWORD@HOST:5432/DB"
+python -m alembic upgrade head
+```
+
+2) 执行直迁：
+
+```bash
+python -m app.tools.migrate_sqlite_to_postgres \
+  --sqlite-path "./data/api_manager.db" \
+  --postgres-url "postgresql+psycopg://USER:PASSWORD@HOST:5432/DB" \
+  --verify
+```
+
+3) 切换服务到 Postgres（只设置一个 DSN 即可）：
+
+- `FCAM_DATABASE__URL=postgresql+psycopg://...`（推荐）

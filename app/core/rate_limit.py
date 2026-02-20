@@ -5,8 +5,9 @@ import threading
 import time
 from dataclasses import dataclass
 
-from app.errors import FcamError
 from redis.exceptions import WatchError
+
+from app.errors import FcamError
 
 
 @dataclass

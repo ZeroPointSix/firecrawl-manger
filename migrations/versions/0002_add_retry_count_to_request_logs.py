@@ -7,8 +7,8 @@ Create Date: 2026-02-10
 
 from __future__ import annotations
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0002_add_retry_count_to_request_logs"
 down_revision = "0001_init"
