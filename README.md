@@ -1,5 +1,8 @@
 # Firecrawl API Manager（FCAM）
 
+[![CI](https://github.com/ZeroPointSix/firecrawl-manger/actions/workflows/ci.yml/badge.svg)](https://github.com/ZeroPointSix/firecrawl-manger/actions/workflows/ci.yml)
+[![Docker Image](https://img.shields.io/docker/v/guangshanshui/firecrawl-manager?label=docker&logo=docker)](https://hub.docker.com/r/guangshanshui/firecrawl-manager)
+
 FCAM 是一个可容器化部署的轻量级 HTTP 网关，用于集中管理多把 Firecrawl API Key，并向内部业务提供统一的 `/api/*` 转发入口与 `/admin/*` 控制面。
 
 ## 单一事实来源（先读文档）
