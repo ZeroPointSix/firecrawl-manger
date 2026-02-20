@@ -73,12 +73,31 @@ def e2e_server(tmp_path_factory: pytest.TempPathFactory) -> _E2EServer:
             "FCAM_E2E_SCRAPE_URL",
             "FCAM_E2E_ADMIN_TOKEN",
             "FCAM_E2E_MASTER_KEY",
+            "FCAM_E2E_REMOTE_URL",
         },
     )
 
     if not _env_flag("FCAM_E2E"):
         pytest.skip("需要设置环境变量 FCAM_E2E=1 才会运行真实 API 的 E2E 测试")
 
+    # 如果设置了 FCAM_E2E_REMOTE_URL，则使用远程服务器而不是启动本地服务器
+    remote_url = os.environ.get("FCAM_E2E_REMOTE_URL")
+    if remote_url:
+        admin_token = os.environ.get("FCAM_E2E_ADMIN_TOKEN") or "e2e_admin"
+        base_url = remote_url.rstrip("/")
+
+        # 验证远程服务器是否可访问
+        try:
+            r = httpx.get(f"{base_url}/healthz", timeout=10.0)
+            if r.status_code != 200:
+                pytest.skip(f"远程服务器健康检查失败: {base_url}/healthz 返回 {r.status_code}")
+        except Exception as exc:
+            pytest.skip(f"无法连接到远程服务器 {base_url}: {exc}")
+
+        yield _E2EServer(base_url=base_url, admin_token=admin_token)
+        return
+
+    # 本地服务器模式（原有逻辑）
     tmp_dir = tmp_path_factory.mktemp("fcam-e2e")
     db_path = tmp_dir / "e2e.db"
     log_path = tmp_dir / "uvicorn.log"

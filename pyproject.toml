@@ -14,6 +14,7 @@ markers = [
   "regression: regression test suite (re-run after changes; should be fast and stable)",
   "upstream: real upstream calls (cost/flaky; requires FCAM_E2E_ALLOW_UPSTREAM=1)",
   "external: external environment compatibility tests (requires FCAM_FC_* env)",
+  "admin: tests requiring admin token (control plane tests)",
 ]
 
 [tool.ruff]
