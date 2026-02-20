@@ -22,6 +22,7 @@
 - `FCAM_SERVER__ENABLE_DOCS=false`：关闭 OpenAPI 文档
 - `FCAM_CONFIG=/app/config.yaml`：指定配置文件路径（若你用 ConfigMap 覆盖）
 - `FCAM_DATABASE__PATH=/app/data/api_manager.db`：显式指定 SQLite 文件路径（建议）
+- `FCAM_DATABASE_URL=sqlite:////app/data/api_manager.db`：显式指定 Alembic 迁移使用的数据库 URL（建议与 `FCAM_DATABASE__PATH` 保持一致）
 
 > 注意：配置项通过环境变量覆盖时，嵌套字段使用双下划线，例如 `FCAM_SERVER__ENABLE_DOCS`（不是 `FCAM_SERVER_ENABLE_DOCS`）。
 
