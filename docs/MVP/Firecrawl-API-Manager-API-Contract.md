@@ -392,6 +392,62 @@
 }
 ```
 
+### 2.12 PATCH /admin/clients/batch — 批量操作调用方
+**Auth**：Admin
+
+**Request**
+```json
+{
+  "client_ids": [1, 2, 3],
+  "action": "enable" | "disable" | "delete"
+}
+```
+
+参数说明：
+- `client_ids`：要操作的 Client ID 列表（必填，最少 1 个，最多 100 个）
+- `action`：操作类型
+  - `enable`：批量启用
+  - `disable`：批量禁用
+  - `delete`：批量删除（软删除，设置 `is_active=false`）
+
+**Response 200**
+```json
+{
+  "success_count": 2,
+  "failed_count": 1,
+  "failed_items": [
+    {
+      "client_id": 3,
+      "error": "Client not found"
+    }
+  ]
+}
+```
+
+响应说明：
+- `success_count`：成功操作的 Client 数量
+- `failed_count`：失败的 Client 数量
+- `failed_items`：失败的详细信息（仅包含失败项）
+
+**Errors**
+- 400：参数错误（`VALIDATION_ERROR`）
+  - `client_ids` 为空
+  - `client_ids` 超过 100 个
+  - `action` 无效
+- 401/403：Admin 鉴权失败（`ADMIN_UNAUTHORIZED`）
+- 503：数据库不可用（`DB_UNAVAILABLE`）
+
+**使用场景**：
+- 批量启用多个 Client
+- 批量禁用多个 Client（例如临时下线某些服务）
+- 批量删除多个 Client（软删除，不影响历史日志）
+
+**注意事项**：
+- 批量操作在单个数据库事务中执行
+- 部分失败时，成功的操作会被提交，失败的会被记录
+- 每个 Client 的操作都会记录审计日志
+- 重复的 `client_ids` 会被自动去重
+
 ---
 
 ### 2.12 GET /admin/stats — 统计信息（概览）

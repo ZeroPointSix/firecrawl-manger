@@ -4,6 +4,7 @@ import logging
 import secrets as py_secrets
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
+from enum import Enum
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -199,6 +200,23 @@ class UpdateClientRequest(BaseModel):
     rate_limit_per_min: int | None = Field(default=None, ge=0)
     max_concurrent: int | None = Field(default=None, ge=0)
     is_active: bool | None = None
+
+
+class BatchAction(str, Enum):
+    ENABLE = "enable"
+    DISABLE = "disable"
+    DELETE = "delete"
+
+
+class BatchClientRequest(BaseModel):
+    client_ids: list[int] = Field(..., min_length=1, max_length=100)
+    action: BatchAction
+
+
+class BatchClientResponse(BaseModel):
+    success_count: int
+    failed_count: int
+    failed_items: list[dict[str, Any]]
 
 
 @router.get("/keys")
@@ -955,6 +973,84 @@ def rotate_client_token(
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
     return {"client_id": client.id, "token": token}
+
+
+@router.patch("/clients/batch", dependencies=[Depends(require_admin)])
+def batch_update_clients(
+    request: Request,
+    payload: BatchClientRequest,
+    db: Session = Depends(get_db),
+) -> BatchClientResponse:
+    """批量操作 Client（启用、禁用、删除）"""
+
+    # 去重 client_ids
+    unique_client_ids = list(set(payload.client_ids))
+
+    success_count = 0
+    failed_count = 0
+    failed_items: list[dict[str, Any]] = []
+
+    # 查询所有目标 Client
+    clients = db.query(Client).filter(Client.id.in_(unique_client_ids)).all()
+    client_map = {c.id: c for c in clients}
+
+    # 检查不存在的 Client
+    for client_id in unique_client_ids:
+        if client_id not in client_map:
+            failed_count += 1
+            failed_items.append({
+                "client_id": client_id,
+                "error": "Client not found"
+            })
+
+    # 执行批量操作
+    try:
+        for client_id in unique_client_ids:
+            if client_id not in client_map:
+                continue
+
+            client = client_map[client_id]
+
+            try:
+                if payload.action == BatchAction.ENABLE:
+                    client.is_active = True
+                elif payload.action == BatchAction.DISABLE:
+                    client.is_active = False
+                elif payload.action == BatchAction.DELETE:
+                    # 软删除：设置 is_active = False
+                    client.is_active = False
+
+                success_count += 1
+
+                # 记录每个 Client 的审计日志
+                _audit(
+                    db,
+                    request=request,
+                    action=f"client.batch.{payload.action.value}",
+                    resource_type="client",
+                    resource_id=str(client.id),
+                )
+
+            except Exception as e:
+                failed_count += 1
+                failed_items.append({
+                    "client_id": client_id,
+                    "error": str(e)
+                })
+
+        # 提交事务
+        db.commit()
+
+    except Exception as exc:
+        db.rollback()
+        logger.exception("db.clients_batch_failed", extra={"fields": {"op": "clients_batch"}})
+        raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    return BatchClientResponse(
+        success_count=success_count,
+        failed_count=failed_count,
+        failed_items=failed_items
+    )
 
 
 @router.get("/encryption-status")

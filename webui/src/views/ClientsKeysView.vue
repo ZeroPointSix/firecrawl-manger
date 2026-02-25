@@ -23,7 +23,7 @@ import {
 } from "naive-ui";
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
-import { createClient, fetchClients, rotateClientToken, updateClient, type ClientItem } from "@/api/clients";
+import { batchUpdateClients, createClient, fetchClients, rotateClientToken, updateClient, type ClientItem } from "@/api/clients";
 import { fetchEncryptionStatus, type EncryptionStatus } from "@/api/dashboard";
 import { batchKeys, createKey, fetchKeys, importKeysText, purgeKey, testKey, updateKey, type KeyItem } from "@/api/keys";
 import { getFcamErrorMessage } from "@/api/http";
@@ -39,6 +39,8 @@ const loadingEncryption = ref(false);
 const clients = ref<ClientItem[]>([]);
 const clientSearch = ref("");
 const selectedClientId = ref<number | null>(null);
+const checkedClientIds = ref<number[]>([]);
+const batchOperating = ref(false);
 
 const keys = ref<KeyItem[]>([]);
 const checkedKeyRowKeys = ref<number[]>([]);
@@ -393,6 +395,137 @@ async function onDisableClient() {
         },
       });
     },
+  });
+}
+
+// ---- Batch Client Operations ----
+async function handleBatchEnable() {
+  if (!checkedClientIds.value.length || batchOperating.value) return;
+
+  batchOperating.value = true;
+  try {
+    const result = await batchUpdateClients({
+      client_ids: checkedClientIds.value,
+      action: 'enable'
+    });
+
+    if (result.failed_count === 0) {
+      message.success(`已启用 ${result.success_count} 个 Client`);
+    } else {
+      message.warning(`成功 ${result.success_count} 个，失败 ${result.failed_count} 个`);
+      if (result.failed_items.length > 0) {
+        const failedDetails = result.failed_items
+          .map(item => `Client ${item.client_id}: ${item.error}`)
+          .join('\n');
+        dialog.warning({
+          title: '部分操作失败',
+          content: `成功 ${result.success_count} 个，失败 ${result.failed_count} 个\n\n失败详情：\n${failedDetails}`,
+          positiveText: '确定'
+        });
+        checkedClientIds.value = result.failed_items.map(item => item.client_id);
+      }
+    }
+
+    await loadClients();
+    if (result.failed_count === 0) {
+      checkedClientIds.value = [];
+    }
+  } catch (err: unknown) {
+    message.error(getFcamErrorMessage(err), { duration: 5000 });
+  } finally {
+    batchOperating.value = false;
+  }
+}
+
+async function handleBatchDisable() {
+  if (!checkedClientIds.value.length || batchOperating.value) return;
+
+  dialog.warning({
+    title: '确认批量禁用',
+    content: `确认禁用 ${checkedClientIds.value.length} 个 Client？禁用后这些 Client 将无法访问 API。`,
+    positiveText: '确认禁用',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchOperating.value = true;
+      try {
+        const result = await batchUpdateClients({
+          client_ids: checkedClientIds.value,
+          action: 'disable'
+        });
+
+        if (result.failed_count === 0) {
+          message.success(`已禁用 ${result.success_count} 个 Client`);
+        } else {
+          message.warning(`成功 ${result.success_count} 个，失败 ${result.failed_count} 个`);
+          if (result.failed_items.length > 0) {
+            const failedDetails = result.failed_items
+              .map(item => `Client ${item.client_id}: ${item.error}`)
+              .join('\n');
+            dialog.warning({
+              title: '部分操作失败',
+              content: `成功 ${result.success_count} 个，失败 ${result.failed_count} 个\n\n失败详情：\n${failedDetails}`,
+              positiveText: '确定'
+            });
+            checkedClientIds.value = result.failed_items.map(item => item.client_id);
+          }
+        }
+
+        await loadClients();
+        if (result.failed_count === 0) {
+          checkedClientIds.value = [];
+        }
+      } catch (err: unknown) {
+        message.error(getFcamErrorMessage(err), { duration: 5000 });
+      } finally {
+        batchOperating.value = false;
+      }
+    }
+  });
+}
+
+async function handleBatchDelete() {
+  if (!checkedClientIds.value.length || batchOperating.value) return;
+
+  dialog.error({
+    title: '确认批量删除',
+    content: `确认删除 ${checkedClientIds.value.length} 个 Client？此操作不可恢复。`,
+    positiveText: '确认删除',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchOperating.value = true;
+      try {
+        const result = await batchUpdateClients({
+          client_ids: checkedClientIds.value,
+          action: 'delete'
+        });
+
+        if (result.failed_count === 0) {
+          message.success(`已删除 ${result.success_count} 个 Client`);
+        } else {
+          message.warning(`成功 ${result.success_count} 个，失败 ${result.failed_count} 个`);
+          if (result.failed_items.length > 0) {
+            const failedDetails = result.failed_items
+              .map(item => `Client ${item.client_id}: ${item.error}`)
+              .join('\n');
+            dialog.warning({
+              title: '部分操作失败',
+              content: `成功 ${result.success_count} 个，失败 ${result.failed_count} 个\n\n失败详情：\n${failedDetails}`,
+              positiveText: '确定'
+            });
+            checkedClientIds.value = result.failed_items.map(item => item.client_id);
+          }
+        }
+
+        await loadClients();
+        if (result.failed_count === 0) {
+          checkedClientIds.value = [];
+        }
+      } catch (err: unknown) {
+        message.error(getFcamErrorMessage(err), { duration: 5000 });
+      } finally {
+        batchOperating.value = false;
+      }
+    }
   });
 }
 
@@ -1149,6 +1282,40 @@ function rowKey(row: KeyItem) {
                 <n-button size="tiny" :loading="loadingClients" @click="loadClients">刷新</n-button>
               </n-space>
               <n-input v-model:value="clientSearch" placeholder="搜索 client..." size="small" />
+
+              <!-- 批量操作按钮区域 -->
+              <div v-if="checkedClientIds.length > 0" style="padding: 8px; background: #f5f5f5; border-radius: 4px">
+                <n-space vertical size="small">
+                  <div style="font-size: 12px; color: #666">已选择 {{ checkedClientIds.length }} 个 Client</div>
+                  <n-space size="small">
+                    <n-button
+                      size="tiny"
+                      type="success"
+                      :loading="batchOperating"
+                      @click="handleBatchEnable"
+                    >
+                      批量启用
+                    </n-button>
+                    <n-button
+                      size="tiny"
+                      type="warning"
+                      :loading="batchOperating"
+                      @click="handleBatchDisable"
+                    >
+                      批量禁用
+                    </n-button>
+                    <n-button
+                      size="tiny"
+                      type="error"
+                      :loading="batchOperating"
+                      @click="handleBatchDelete"
+                    >
+                      批量删除
+                    </n-button>
+                  </n-space>
+                </n-space>
+              </div>
+
               <n-button type="primary" size="small" @click="showCreateClient = true">创建 Client</n-button>
             </n-space>
           </div>
@@ -1159,16 +1326,32 @@ function rowKey(row: KeyItem) {
                 v-for="c in filteredClients"
                 :key="c.id"
                 :class="{ 'client-item-active': c.id === selectedClientId }"
-                @click="selectedClientId = c.id"
               >
-                <div style="display: flex; align-items: center; justify-content: space-between; width: 100%">
-                  <div class="client-meta">
-                    <div class="client-name" style="font-weight: 700">{{ c.name }}</div>
-                    <div class="muted" style="font-size: 12px">#{{ c.id }}</div>
+                <div style="display: flex; align-items: center; gap: 8px; width: 100%">
+                  <n-checkbox
+                    :checked="checkedClientIds.includes(c.id)"
+                    @update:checked="(checked) => {
+                      if (checked) {
+                        checkedClientIds.push(c.id);
+                      } else {
+                        const idx = checkedClientIds.indexOf(c.id);
+                        if (idx > -1) checkedClientIds.splice(idx, 1);
+                      }
+                    }"
+                    @click.stop
+                  />
+                  <div
+                    style="display: flex; align-items: center; justify-content: space-between; flex: 1; cursor: pointer"
+                    @click="selectedClientId = c.id"
+                  >
+                    <div class="client-meta">
+                      <div class="client-name" style="font-weight: 700">{{ c.name }}</div>
+                      <div class="muted" style="font-size: 12px">#{{ c.id }}</div>
+                    </div>
+                    <n-tag size="small" :type="c.is_active ? 'success' : 'default'">{{
+                      c.is_active ? "启用" : "禁用"
+                    }}</n-tag>
                   </div>
-                  <n-tag size="small" :type="c.is_active ? 'success' : 'default'">{{
-                    c.is_active ? "启用" : "禁用"
-                  }}</n-tag>
                 </div>
               </n-list-item>
             </n-list>

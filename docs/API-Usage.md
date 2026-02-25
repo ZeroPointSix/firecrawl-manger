@@ -133,6 +133,56 @@ HTTP：
 建议：
 - 轮换后旧 token 应尽快从业务服务侧撤销。
 
+### 3.3 批量操作 Client
+
+HTTP：
+- `PATCH /admin/clients/batch`
+
+支持的操作：
+- `enable`：批量启用
+- `disable`：批量禁用
+- `delete`：批量删除（软删除）
+
+示例（PowerShell - 批量启用）：
+```powershell
+$origin="http://127.0.0.1:18000"
+$h=@{ Authorization = "Bearer $env:FCAM_ADMIN_TOKEN" }
+$body=@{ client_ids=@(1,2,3); action="enable" } | ConvertTo-Json
+Invoke-RestMethod -Method PATCH -Uri "$origin/admin/clients/batch" -Headers $h -ContentType "application/json" -Body $body
+```
+
+示例（PowerShell - 批量禁用）：
+```powershell
+$body=@{ client_ids=@(1,2,3); action="disable" } | ConvertTo-Json
+Invoke-RestMethod -Method PATCH -Uri "$origin/admin/clients/batch" -Headers $h -ContentType "application/json" -Body $body
+```
+
+示例（PowerShell - 批量删除）：
+```powershell
+$body=@{ client_ids=@(1,2,3); action="delete" } | ConvertTo-Json
+Invoke-RestMethod -Method PATCH -Uri "$origin/admin/clients/batch" -Headers $h -ContentType "application/json" -Body $body
+```
+
+返回示例：
+```json
+{
+  "success_count": 2,
+  "failed_count": 1,
+  "failed_items": [
+    {
+      "client_id": 3,
+      "error": "Client not found"
+    }
+  ]
+}
+```
+
+注意事项：
+- 最多支持一次操作 100 个 Client
+- 重复的 ID 会自动去重
+- 部分失败时，成功的操作会被提交
+- 每个操作都会记录审计日志
+
 ---
 
 ## 4. 调用方：通过 `/api/*` 使用 Firecrawl（scrape / crawl / agent）

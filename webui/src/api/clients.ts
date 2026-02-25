@@ -47,3 +47,22 @@ export async function updateClient(clientId: number, payload: UpdateClientReques
   const res = await http.put<ClientItem>(`/admin/clients/${clientId}`, payload);
   return res.data;
 }
+
+export type BatchClientRequest = {
+  client_ids: number[];
+  action: 'enable' | 'disable' | 'delete';
+};
+
+export type BatchClientResponse = {
+  success_count: number;
+  failed_count: number;
+  failed_items: Array<{
+    client_id: number;
+    error: string;
+  }>;
+};
+
+export async function batchUpdateClients(payload: BatchClientRequest) {
+  const res = await http.patch<BatchClientResponse>('/admin/clients/batch', payload);
+  return res.data;
+}
