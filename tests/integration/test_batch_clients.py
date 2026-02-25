@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
@@ -444,7 +443,7 @@ def test_concurrent_batch_delete(tmp_path):
     # 两个管理员同时批量删除
     with ThreadPoolExecutor(max_workers=2) as executor:
         futures = [executor.submit(batch_delete) for _ in range(2)]
-        results = [f.result() for f in futures]
+        _ = [f.result() for f in futures]
 
     # 验证数据一致性：所有 Client 都应该是禁用状态
     for cid in client_ids:
@@ -468,8 +467,6 @@ def test_batch_enable_rollback_on_error(tmp_path):
 
     # 模拟数据库错误
     from sqlalchemy.orm import Session
-
-    original_commit = Session.commit
 
     def mock_commit_error(self):
         raise Exception("Database error")
