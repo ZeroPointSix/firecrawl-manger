@@ -100,6 +100,29 @@
 - **前端构建**：成功（输出到 `app/ui2/`）
 - **Docker 构建**：成功（CI 自动构建并推送到 Docker Hub）
 
+## Docker 镜像
+
+v0.1.8 版本的 Docker 镜像已发布到 Docker Hub：
+
+```bash
+# 使用版本标签（推荐）
+docker pull guangshanshui/firecrawl-manager:v0.1.8
+docker pull guangshanshui/firecrawl-manager:0.1
+
+# 使用 latest 标签
+docker pull guangshanshui/firecrawl-manager:latest
+
+# 使用 commit SHA 标签
+docker pull guangshanshui/firecrawl-manager:sha-1bfd4fd
+```
+
+**Docker Hub 地址**：https://hub.docker.com/r/guangshanshui/firecrawl-manager/tags
+
+**镜像信息**：
+- 平台：linux/amd64
+- 压缩大小：约 72 MB
+- 基础镜像：Python 3.11-slim
+
 ## 升级指南
 
 ### 1. 数据库迁移
