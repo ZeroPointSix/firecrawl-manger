@@ -107,7 +107,9 @@ def test_smoke_core_flow(tmp_path):
 
         r_api_unauth = http.post("/api/scrape", json={"url": "https://example.com"})
         assert r_api_unauth.status_code == 401
-        assert r_api_unauth.json()["error"]["code"] == "CLIENT_UNAUTHORIZED"
+        body = r_api_unauth.json()
+        assert body["success"] is False
+        assert body["error"] == "Missing or invalid client token"
 
         r_scrape = http.post(
             "/api/scrape",
@@ -117,4 +119,3 @@ def test_smoke_core_flow(tmp_path):
         assert r_scrape.status_code == 200
         assert r_scrape.headers.get("x-request-id")
         assert r_scrape.json() == {"ok": True, "method": "POST", "path": "/v1/scrape"}
-

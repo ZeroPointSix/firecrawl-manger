@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timezone
 from typing import Any
@@ -62,11 +63,24 @@ class PlainFormatter(logging.Formatter):
 
 def configure_logging(config: LoggingConfig) -> None:
     root = logging.getLogger()
-    root.handlers.clear()
+
+    # `pytest` 会在运行时向 root logger 注入日志捕获 handler（caplog/失败输出等）。
+    # 若在应用侧强行 `handlers.clear()`，可能导致捕获失效并引入用例顺序相关的抖动。
+    # 因此在 pytest 环境下只移除本项目自身注入的 handler；非 pytest 环境保持原行为（清空）。
+    under_pytest = "PYTEST_CURRENT_TEST" in os.environ or any(
+        name.startswith("_pytest") for name in sys.modules
+    )
+    if under_pytest:
+        for h in list(root.handlers):
+            if getattr(h, "_fcam_handler", False):
+                root.removeHandler(h)
+    else:
+        root.handlers.clear()
     root.setLevel(config.level.upper())
 
     sensitive_keys = {k.lower() for k in config.redact_fields}
     handler = logging.StreamHandler(sys.stdout)
+    handler._fcam_handler = True  # type: ignore[attr-defined]
     if config.format == "plain":
         handler.setFormatter(PlainFormatter(sensitive_keys))
     else:

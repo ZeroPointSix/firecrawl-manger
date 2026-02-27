@@ -6,7 +6,13 @@ addopts = [
   ".pytest_tmp",
   "--strict-markers",
 ]
+asyncio_mode = "auto"
+filterwarnings = [
+  "error::DeprecationWarning",
+  "error::PendingDeprecationWarning",
+]
 markers = [
+  "asyncio: async tests powered by pytest-asyncio",
   "unit: fast, isolated unit tests (no HTTP server, no real DB/network)",
   "integration: integration tests (TestClient/SQLite/MockTransport; no real upstream)",
   "e2e: black-box end-to-end tests (HTTP; opt-in via FCAM_E2E=1)",

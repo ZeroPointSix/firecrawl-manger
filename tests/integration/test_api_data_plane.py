@@ -27,7 +27,7 @@ _ENDPOINT_CASES = [
     ("POST", "/api/crawl", "/v1/crawl"),
     ("GET", "/api/crawl/abc123", "/v1/crawl/abc123"),
     ("POST", "/api/search", "/v1/search"),
-    ("POST", "/api/agent", "/v1/agent"),
+    ("POST", "/api/agent", "/v2/agent"),
 ]
 
 _COMPAT_ENDPOINT_CASES = [
@@ -35,7 +35,7 @@ _COMPAT_ENDPOINT_CASES = [
     ("POST", "/v1/crawl", "/v1/crawl"),
     ("GET", "/v1/crawl/abc123", "/v1/crawl/abc123"),
     ("POST", "/v1/search", "/v1/search"),
-    ("POST", "/v1/agent", "/v1/agent"),
+    ("POST", "/v1/agent", "/v2/agent"),
 ]
 
 _V2_ENDPOINT_CASES = [
@@ -83,10 +83,10 @@ def _make_app(tmp_path, *, handler):
             name="svc",
             token_hash=token_hash,
             is_active=True,
-            daily_quota=10,
+            daily_quota=10_000,
             daily_usage=0,
             quota_reset_at=today_in_timezone("UTC"),
-            rate_limit_per_min=60,
+            rate_limit_per_min=10_000,
             max_concurrent=10,
         )
         db.add(c)
@@ -100,10 +100,11 @@ def _make_app(tmp_path, *, handler):
             api_key_last4="0001",
             is_active=True,
             status="active",
-            daily_quota=100,
+            daily_quota=100_000,
             daily_usage=0,
             quota_reset_at=today_in_timezone("UTC"),
             max_concurrent=10,
+            rate_limit_per_min=10_000,
         )
         db.add(k)
         db.commit()
@@ -121,7 +122,9 @@ def test_api_requires_client_auth(tmp_path):
     with TestClient(app) as client:
         resp = client.post("/api/scrape", json={"url": "https://example.com"})
     assert resp.status_code == 401
-    assert resp.json()["error"]["code"] == "CLIENT_UNAUTHORIZED"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Missing or invalid client token"
     assert "X-Request-Id" in resp.headers
 
 
@@ -143,7 +146,9 @@ def test_api_rate_limited(tmp_path):
 
     assert r1.status_code == 200
     assert r2.status_code == 429
-    assert r2.json()["error"]["code"] == "CLIENT_RATE_LIMITED"
+    body = r2.json()
+    assert body["success"] is False
+    assert body["error"] == "Client rate limited"
     assert int(r2.headers.get("Retry-After", "0")) >= 1
 
 
@@ -165,7 +170,9 @@ def test_api_quota_exceeded(tmp_path):
         resp = client.post("/api/scrape", headers=headers, json={"url": "https://example.com"})
 
     assert resp.status_code == 429
-    assert resp.json()["error"]["code"] == "CLIENT_QUOTA_EXCEEDED"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Client quota exceeded"
     assert int(resp.headers.get("Retry-After", "0")) >= 1
 
 
@@ -195,150 +202,168 @@ def test_api_concurrency_limited(tmp_path):
     assert codes == [200, 429]
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "expected_upstream_path"),
-    _ENDPOINT_CASES,
-)
-def test_api_endpoints_forward_to_expected_upstream(tmp_path, method: str, path: str, expected_upstream_path: str):
-    seen: dict[str, str] = {}
+def _call_proxy_endpoint(client: TestClient, *, method: str, path: str, headers: dict[str, str]) -> httpx.Response:
+    if method == "GET":
+        return client.get(path, headers=headers)
+    return client.request(method, path, headers=headers, json={"url": "https://example.com"})
+
+
+def test_api_endpoints_forward_to_expected_upstream(tmp_path):
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["path"] = request.url.path
+        seen.append((request.method, request.url.path))
         return httpx.Response(200, json={"ok": True})
 
     app, token = _make_app(tmp_path, handler=handler)
     headers = {"Authorization": f"Bearer {token}"}
 
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _ENDPOINT_CASES]
+
     with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+        for method, path, _expected_upstream_path in _ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 200, (method, path, resp.text)
 
-    assert resp.status_code == 200
-    assert seen["method"] == method
-    assert seen["path"] == expected_upstream_path
+    assert seen == expected
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "expected_upstream_path"),
-    _COMPAT_ENDPOINT_CASES,
-)
-def test_firecrawl_compat_endpoints_forward_to_expected_upstream(
-    tmp_path, method: str, path: str, expected_upstream_path: str
-):
-    seen: dict[str, str] = {}
+def test_firecrawl_compat_endpoints_forward_to_expected_upstream(tmp_path):
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["path"] = request.url.path
+        seen.append((request.method, request.url.path))
         return httpx.Response(200, json={"ok": True})
 
     app, token = _make_app(tmp_path, handler=handler)
     headers = {"Authorization": f"Bearer {token}"}
 
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _COMPAT_ENDPOINT_CASES]
+
     with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+        for method, path, _expected_upstream_path in _COMPAT_ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 200, (method, path, resp.text)
 
-    assert resp.status_code == 200
-    assert seen["method"] == method
-    assert seen["path"] == expected_upstream_path
+    assert seen == expected
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "expected_upstream_path"),
-    _V2_ENDPOINT_CASES,
-)
-def test_firecrawl_v2_compat_endpoints_forward_to_expected_upstream(
-    tmp_path, method: str, path: str, expected_upstream_path: str
-):
-    seen: dict[str, str] = {}
+def test_firecrawl_v2_compat_endpoints_forward_to_expected_upstream(tmp_path):
+    seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["method"] = request.method
-        seen["path"] = request.url.path
+        seen.append((request.method, request.url.path))
         return httpx.Response(200, json={"ok": True})
 
     app, token = _make_app(tmp_path, handler=handler)
     headers = {"Authorization": f"Bearer {token}"}
 
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _V2_ENDPOINT_CASES]
+
     with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+        for method, path, _expected_upstream_path in _V2_ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 200, (method, path, resp.text)
 
-    assert resp.status_code == 200
-    assert seen["method"] == method
-    assert seen["path"] == expected_upstream_path
+    assert seen == expected
 
 
-@pytest.mark.parametrize(("method", "path", "expected_upstream_path"), _ENDPOINT_CASES)
-def test_api_endpoints_passthrough_upstream_429(tmp_path, method: str, path: str, expected_upstream_path: str):
+def test_api_endpoints_passthrough_upstream_429(tmp_path):
+    seen: list[tuple[str, str]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == expected_upstream_path
+        seen.append((request.method, request.url.path))
         return httpx.Response(429, headers={"Retry-After": "1"}, json={"error": "rate"})
 
     app, token = _make_app(tmp_path, handler=handler)
     app.state.config.firecrawl.max_retries = 0
 
+    # 429 会把 key 标记为 cooling；为避免多次调用后“所有 key cooling”导致非预期拦截，
+    # 这里为本测试补足足够数量的 key，让每次请求都能选到新的 key。
+    SessionLocal = app.state.db_session_factory
+    with SessionLocal() as db:
+        c = db.query(Client).one()
+        key_bytes = derive_master_key_bytes(app.state.secrets.master_key)
+        for i in range(2, len(_ENDPOINT_CASES) + 1):
+            db.add(
+                ApiKey(
+                    client_id=c.id,
+                    api_key_ciphertext=encrypt_api_key(key_bytes, f"fc-key-{i}"),
+                    api_key_hash=f"h{i}",
+                    api_key_last4=f"{i:04d}"[-4:],
+                    is_active=True,
+                    status="active",
+                    daily_quota=100_000,
+                    daily_usage=0,
+                    quota_reset_at=today_in_timezone("UTC"),
+                    max_concurrent=10,
+                    rate_limit_per_min=10_000,
+                )
+            )
+        db.commit()
+
     headers = {"Authorization": f"Bearer {token}"}
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _ENDPOINT_CASES]
+
     with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+        for method, path, _expected_upstream_path in _ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 429, (method, path, resp.text)
+            assert resp.json() == {"error": "rate"}
+            assert resp.headers.get("Retry-After") == "1"
+            assert "X-Request-Id" in resp.headers
 
-    assert resp.status_code == 429
-    assert resp.json() == {"error": "rate"}
-    assert resp.headers.get("Retry-After") == "1"
-    assert "X-Request-Id" in resp.headers
+    assert seen == expected
 
 
-@pytest.mark.parametrize(("method", "path", "expected_upstream_path"), _ENDPOINT_CASES)
-def test_api_endpoints_passthrough_upstream_5xx(tmp_path, method: str, path: str, expected_upstream_path: str):
+def test_api_endpoints_passthrough_upstream_5xx(tmp_path):
+    seen: list[tuple[str, str]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == expected_upstream_path
+        seen.append((request.method, request.url.path))
         return httpx.Response(500, json={"error": "boom"})
 
     app, token = _make_app(tmp_path, handler=handler)
     app.state.config.firecrawl.max_retries = 0
+    app.state.config.firecrawl.failure_threshold = 10_000
 
     headers = {"Authorization": f"Bearer {token}"}
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _ENDPOINT_CASES]
+
     with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+        for method, path, _expected_upstream_path in _ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 500, (method, path, resp.text)
+            assert resp.json() == {"error": "boom"}
+            assert "X-Request-Id" in resp.headers
 
-    assert resp.status_code == 500
-    assert resp.json() == {"error": "boom"}
-    assert "X-Request-Id" in resp.headers
+    assert seen == expected
 
 
-@pytest.mark.parametrize(("method", "path", "expected_upstream_path"), _ENDPOINT_CASES)
-def test_api_endpoints_timeout_returns_gateway_error(tmp_path, method: str, path: str, expected_upstream_path: str):
+def test_api_endpoints_timeout_returns_gateway_error(tmp_path):
+    seen: list[tuple[str, str]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == expected_upstream_path
+        seen.append((request.method, request.url.path))
         raise httpx.ReadTimeout("timeout", request=request)
 
     app, token = _make_app(tmp_path, handler=handler)
     app.state.config.firecrawl.max_retries = 0
+    app.state.config.firecrawl.failure_threshold = 10_000
 
     headers = {"Authorization": f"Bearer {token}"}
-    with TestClient(app) as client:
-        if method == "GET":
-            resp = client.get(path, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers, json={"url": "https://example.com"})
+    expected = [(method, expected_upstream_path) for method, _path, expected_upstream_path in _ENDPOINT_CASES]
 
-    assert resp.status_code == 504
-    assert resp.json()["error"]["code"] == "UPSTREAM_TIMEOUT"
-    assert "X-Request-Id" in resp.headers
+    with TestClient(app) as client:
+        for method, path, _expected_upstream_path in _ENDPOINT_CASES:
+            resp = _call_proxy_endpoint(client, method=method, path=path, headers=headers)
+            assert resp.status_code == 504, (method, path, resp.text)
+            body = resp.json()
+            assert body["success"] is False
+            assert body["error"] == "Upstream timeout"
+            assert "X-Request-Id" in resp.headers
+
+    assert seen == expected
 
 
 def test_api_writes_request_log_on_success(tmp_path):
@@ -492,7 +517,9 @@ def test_api_idempotency_conflict_returns_409(tmp_path):
 
     assert r1.status_code == 200
     assert r2.status_code == 409
-    assert r2.json()["error"]["code"] == "IDEMPOTENCY_KEY_CONFLICT"
+    body = r2.json()
+    assert body["success"] is False
+    assert body["error"] == "Idempotency key conflict"
     assert calls["n"] == 1
 
 
@@ -531,7 +558,9 @@ def test_api_idempotency_in_progress_returns_409(tmp_path):
         resp = client.post("/api/crawl", headers=headers, json=payload)
 
     assert resp.status_code == 409
-    assert resp.json()["error"]["code"] == "IDEMPOTENCY_IN_PROGRESS"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Idempotent request in progress"
     assert int(resp.headers.get("Retry-After", "0")) >= 1
 
 
@@ -547,7 +576,9 @@ def test_api_idempotency_required_when_configured(tmp_path):
         resp = client.post("/api/crawl", headers=headers, json={"url": "https://example.com"})
 
     assert resp.status_code == 400
-    assert resp.json()["error"]["code"] == "IDEMPOTENCY_KEY_REQUIRED"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Idempotency key required"
 
 
 def test_api_idempotency_expired_record_is_cleaned_and_recreated(tmp_path):
@@ -621,7 +652,9 @@ def test_api_no_key_configured_returns_503(tmp_path):
         resp = client.post("/api/scrape", headers=headers, json={"url": "https://example.com"})
 
     assert resp.status_code == 503
-    assert resp.json()["error"]["code"] == "NO_KEY_CONFIGURED"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "No key configured for client"
 
 
 def test_api_all_keys_cooling_returns_429(tmp_path):
@@ -641,7 +674,9 @@ def test_api_all_keys_cooling_returns_429(tmp_path):
         resp = client.post("/api/scrape", headers=headers, json={"url": "https://example.com"})
 
     assert resp.status_code == 429
-    assert resp.json()["error"]["code"] == "ALL_KEYS_COOLING"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "All keys cooling"
     assert int(resp.headers.get("Retry-After", "0")) >= 1
 
 
@@ -663,7 +698,9 @@ def test_api_all_keys_quota_exceeded_returns_429(tmp_path):
         resp = client.post("/api/scrape", headers=headers, json={"url": "https://example.com"})
 
     assert resp.status_code == 429
-    assert resp.json()["error"]["code"] == "ALL_KEYS_QUOTA_EXCEEDED"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "All keys quota exceeded"
     assert int(resp.headers.get("Retry-After", "0")) >= 1
 
 
@@ -709,4 +746,6 @@ def test_api_db_unavailable_returns_503(tmp_path):
         )
 
     assert resp.status_code == 503
-    assert resp.json()["error"]["code"] == "DB_UNAVAILABLE"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Database unavailable"

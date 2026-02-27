@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +16,10 @@ from app.api.health import router as health_router
 from app.config import AppConfig, Secrets, load_config
 from app.core.concurrency import ConcurrencyManager, RedisConcurrencyManager
 from app.core.cooldown import NoopCooldownStore, RedisCooldownStore
+from app.core.credit_refresh_scheduler import (
+    start_credit_refresh_scheduler,
+    stop_credit_refresh_scheduler,
+)
 from app.core.forwarder import Forwarder
 from app.core.key_pool import KeyPool
 from app.core.rate_limit import RedisTokenBucketRateLimiter, TokenBucketRateLimiter
@@ -33,10 +38,33 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
 
     configure_logging(config.logging)
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await start_credit_refresh_scheduler(app)
+        try:
+            yield
+        finally:
+            await stop_credit_refresh_scheduler(app)
+
+        try:
+            db_engine = getattr(app.state, "db_engine", None)
+            if db_engine is not None:
+                db_engine.dispose()
+        except Exception:
+            logger.exception("app.shutdown_db_dispose_failed")
+
+        redis_client = getattr(app.state, "redis", None)
+        if redis_client is not None:
+            try:
+                redis_client.close()
+            except Exception:
+                logger.exception("app.shutdown_redis_close_failed")
+
     app = FastAPI(
         docs_url="/docs" if config.server.enable_docs else None,
         redoc_url=None,
         openapi_url="/openapi.json" if config.server.enable_docs else None,
+        lifespan=lifespan,
     )
     app.state.config = config
     app.state.secrets = secrets

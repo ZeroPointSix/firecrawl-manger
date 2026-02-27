@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { NButton, NCard, NDataTable, NInput, NModal, NSelect, NSpace, NTag, useMessage } from "naive-ui";
+import { NButton, NCard, NCheckboxGroup, NDataTable, NDropdown, NInput, NModal, NSelect, NSpace, NTag, useMessage } from "naive-ui";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
 
 import { fetchRequestLogs, type RequestLogItem } from "@/api/logs";
 import { getFcamErrorMessage } from "@/api/http";
 import { adminToken } from "@/state/adminAuth";
+import { formatTimestamp } from "@/utils/time";
 
 const message = useMessage();
 
@@ -180,8 +181,70 @@ watch(showDetail, (v) => {
   detailRow.value = null;
 });
 
+// 列选择功能
+const STORAGE_KEY_VISIBLE_COLUMNS = "fcam_logs_visible_columns";
+
+const allColumnKeys = [
+  "created_at",
+  "level",
+  "endpoint",
+  "status_code",
+  "success",
+  "client_id",
+  "api_key_masked",
+  "retry_count",
+  "error_message",
+  "detail",
+  "request_id",
+];
+
+const columnLabels: Record<string, string> = {
+  created_at: "时间",
+  level: "级别",
+  endpoint: "端点",
+  status_code: "状态码",
+  success: "成功",
+  client_id: "Client ID",
+  api_key_masked: "API Key",
+  retry_count: "重试次数",
+  error_message: "错误信息",
+  detail: "详情",
+  request_id: "Request ID",
+};
+
+// 从 localStorage 加载可见列配置
+function loadVisibleColumns(): string[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_VISIBLE_COLUMNS);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  // 默认显示所有列
+  return [...allColumnKeys];
+}
+
+const visibleColumns = ref<string[]>(loadVisibleColumns());
+
+// 保存可见列配置到 localStorage
+watch(visibleColumns, (cols) => {
+  try {
+    localStorage.setItem(STORAGE_KEY_VISIBLE_COLUMNS, JSON.stringify(cols));
+  } catch {
+    // ignore
+  }
+}, { deep: true });
+
 const columns = [
-  { title: "时间", key: "created_at", width: 190 },
+  {
+    title: "时间",
+    key: "created_at",
+    width: 170,
+    render: (row: RequestLogItem) => formatTimestamp(row.created_at)
+  },
   { title: "level", key: "level", width: 90, render: (row: RequestLogItem) => levelTag(row) },
   { title: "endpoint", key: "endpoint", width: 110 },
   { title: "status", key: "status_code", width: 80 },
@@ -225,12 +288,37 @@ const columns = [
     render: (row: RequestLogItem) => h("span", { class: "mono" }, row.request_id),
   },
 ];
+
+// 根据用户选择过滤列
+const filteredColumns = computed(() => {
+  return columns.filter(col => visibleColumns.value.includes(col.key));
+});
+
+// 列选择选项
+const columnOptions = computed(() => {
+  return allColumnKeys.map(key => ({
+    label: columnLabels[key] || key,
+    value: key,
+  }));
+});
 </script>
 
 <template>
   <n-card title="请求日志" size="small">
     <template #header-extra>
       <n-space>
+        <n-dropdown trigger="click">
+          <template #trigger>
+            <n-button size="small">列</n-button>
+          </template>
+          <div style="padding: 12px; min-width: 200px">
+            <n-checkbox-group v-model:value="visibleColumns">
+              <n-space vertical>
+                <n-checkbox v-for="opt in columnOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+              </n-space>
+            </n-checkbox-group>
+          </div>
+        </n-dropdown>
         <n-button size="small" :loading="loading" @click="reload">刷新</n-button>
       </n-space>
     </template>
@@ -251,7 +339,7 @@ const columns = [
       </n-space>
 
       <n-data-table
-        :columns="columns as any"
+        :columns="filteredColumns as any"
         :data="currentLogs"
         :loading="loading"
         :pagination="false"
@@ -281,7 +369,7 @@ const columns = [
         </n-space>
 
         <n-space wrap size="small" class="muted" style="font-size: 12px">
-          <div>time={{ detailRow.created_at }}</div>
+          <div>time={{ formatTimestamp(detailRow.created_at) }}</div>
           <div>endpoint={{ detailRow.endpoint }}</div>
           <div>method={{ detailRow.method }}</div>
           <div>status={{ detailRow.status_code ?? "-" }}</div>

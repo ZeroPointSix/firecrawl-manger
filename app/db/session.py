@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.config import AppConfig
 
@@ -14,6 +15,8 @@ REQUIRED_TABLES = {
     "request_logs",
     "audit_logs",
     "idempotency_records",
+    "upstream_resource_bindings",
+    "credit_snapshots",
 }
 
 
@@ -31,9 +34,11 @@ def build_database_url(config: AppConfig) -> str:
 def create_engine_from_config(config: AppConfig) -> Engine:
     url = build_database_url(config)
     connect_args: dict[str, Any] = {}
+    engine_kwargs: dict[str, Any] = {"future": True}
     if url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
-    return create_engine(url, connect_args=connect_args, future=True)
+        engine_kwargs["poolclass"] = StaticPool if ":memory:" in url else NullPool
+    return create_engine(url, connect_args=connect_args, **engine_kwargs)
 
 
 def create_session_factory(engine: Engine) -> sessionmaker[Session]:

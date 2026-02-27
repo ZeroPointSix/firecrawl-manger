@@ -400,7 +400,9 @@ def test_e2e_firecrawl_compat_v1_scrape_rejected_without_token_is_logged(http: h
     request_id = f"e2eV1NoAuth_{uuid.uuid4().hex[:24]}"
     r = http.post("/v1/scrape", headers={"X-Request-Id": request_id}, json={"url": "https://example.com"})
     assert r.status_code == 401
-    assert r.json()["error"]["code"] == "CLIENT_UNAUTHORIZED"
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "Missing or invalid client token"
 
     r_log = http.get("/admin/logs", headers=admin_headers, params={"request_id": request_id})
     assert r_log.status_code == 200
@@ -440,7 +442,9 @@ def test_e2e_firecrawl_compat_v1_scrape_no_key_configured_is_logged(http: httpx.
         json={"url": "https://example.com"},
     )
     assert r.status_code == 503
-    assert r.json()["error"]["code"] == "NO_KEY_CONFIGURED"
+    body = r.json()
+    assert body["success"] is False
+    assert body["error"] == "No key configured for client"
 
     r_log = http.get("/admin/logs", headers=admin_headers, params={"request_id": request_id})
     assert r_log.status_code == 200

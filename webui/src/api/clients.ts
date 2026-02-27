@@ -4,6 +4,7 @@ export type ClientItem = {
   id: number;
   name: string;
   is_active: boolean;
+  status: string;
   daily_quota: number | null;
   daily_usage: number;
   quota_reset_at: string | null;

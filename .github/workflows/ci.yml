@@ -36,7 +36,7 @@ jobs:
         ruff check app/ tests/ --output-format=github
 
   test:
-    name: 单元测试
+    name: 测试（含集成）
     runs-on: ubuntu-latest
 
     steps:
@@ -56,11 +56,7 @@ jobs:
 
     - name: 运行测试
       run: |
-        pytest --cov=app --cov-report=xml --cov-report=term
-
-    - name: 检查覆盖率
-      run: |
-        pytest --cov=app --cov-fail-under=80
+        pytest --cov=app --cov-report=xml --cov-report=term --cov-fail-under=80
 
   docker:
     name: Docker 构建

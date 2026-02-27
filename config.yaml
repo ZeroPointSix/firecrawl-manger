@@ -28,7 +28,7 @@ security:
     master_key_env: "FCAM_MASTER_KEY"
   request_limits:
     max_body_bytes: 1048576 # 1MB
-    allowed_paths: ["scrape", "crawl", "search", "agent", "map", "extract", "batch"]
+    allowed_paths: ["scrape", "crawl", "search", "agent", "map", "extract", "batch", "browser", "team"]
 
 quota:
   # 文档冻结：quota.timezone=UTC；quota.count_mode=success
@@ -40,6 +40,32 @@ quota:
 
 rate_limit:
   cooldown_seconds: 60
+
+credit_monitoring:
+  enabled: true
+
+  smart_refresh:
+    enabled: true
+    high_usage_interval: 15
+    medium_usage_interval: 30
+    normal_usage_interval: 60
+    low_usage_interval: 120
+
+  fixed_refresh:
+    interval_minutes: 60
+
+  batch_size: 10
+  batch_delay_seconds: 5
+
+  local_estimation:
+    enabled: true
+    sync_on_request: true
+
+  retention_days: 90
+  retry_delay_minutes: 10
+  refresh_check_interval_seconds: 300
+  min_manual_refresh_interval_seconds: 300
+  history_max_limit: 500
 
 idempotency:
   enabled: true

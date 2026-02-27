@@ -6,7 +6,47 @@
 
 ## 2026-02-25（UTC）
 
-### Client 批量管理功能
+### Client 批量管理功能 - Bug 修复
+
+**问题描述**
+- Bug #1：批量删除和批量禁用效果相同（都只设置 `is_active=False`），无法区分已禁用和已删除的 Client
+- Bug #2：全选 UI 设计错误（使用单独的"全选所有 Client"按钮，而不是"创建 Client"按钮旁边的复选框）
+
+**修复内容**
+- 数据库迁移：新增 `0007_add_status_to_clients.py`，为 clients 表添加 `status` 字段（String(32)，默认 "active"）
+- Client 模型：添加 `status` 字段，参考 ApiKey 的设计模式（status 值：active, disabled, deleted）
+- 批量操作逻辑修复：
+  - `enable`: 设置 `is_active=True` 和 `status="active"`
+  - `disable`: 设置 `is_active=False` 和 `status="disabled"`
+  - `delete`: 设置 `is_active=False` 和 `status="deleted"`
+- 列表 API 修复：GET /admin/clients 默认过滤掉 `status="deleted"` 的记录（软删除）
+- 前端类型更新：ClientItem 添加 `status: string` 字段
+- 前端 UI 修复：
+  - 在"创建 Client"按钮右侧添加全选复选框
+  - 添加 `allClientsSelected` 和 `someClientsSelected` 计算属性
+  - 添加 `handleSelectAll` 函数处理复选框点击
+  - 移除批量操作区域的"全选/取消全选"按钮
+
+**关键选择（KISS/DRY/SOLID）**
+- 参考 ApiKey 的设计模式，使用 `status` 字段区分不同状态，而不是仅依赖 `is_active` 布尔值
+- 软删除：`status="deleted"` 的记录不出现在列表中，但数据库中仍然保留（便于审计和恢复）
+- 全选复选框支持三态：未选中、部分选中（indeterminate）、全选中
+
+**本次验证结果**
+- 数据库迁移：成功执行 `0007_add_status_to_clients`
+- `pytest tests/integration/test_batch_clients.py`：通过（17 个测试用例全部通过）
+- `pytest --ignore=tests/unit/test_batch_clients.py`：通过（所有其他测试通过）
+- `npm run type-check`：通过（TypeScript 类型检查无错误）
+- `npm run build`：通过（前端构建成功）
+
+**用户价值**
+- 批量删除和批量禁用现在有明确区分，删除的 Client 不会出现在列表中
+- 全选操作更符合用户习惯（复选框在按钮旁边，而不是单独的按钮）
+- 软删除机制保留了历史数据，便于审计和问题排查
+
+---
+
+### Client 批量管理功能（初始实现）
 
 **完成内容**
 - 后端 API：新增 `PATCH /admin/clients/batch` 端点，支持批量启用、禁用、删除操作
@@ -28,7 +68,6 @@
 
 **关键选择（KISS/DRY/SOLID）**
 - 批量操作在单个数据库事务中执行，部分失败时成功的操作会被提交
-- 批量删除实现为软删除（设置 `is_active=False`），保持与单个删除操作的一致性
 - 前端使用 Naive UI 的原生复选框组件，避免引入额外依赖
 - 重复的 client_ids 自动去重，避免重复操作同一个 Client
 

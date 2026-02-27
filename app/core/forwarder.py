@@ -182,6 +182,7 @@ class Forwarder:
         upstream_path: str,
         json_body: Any | None,
         inbound_headers: dict[str, str],
+        pinned_api_key_id: int | None = None,
     ) -> ForwardResult:
         if self._master_key is None:
             raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
@@ -202,6 +203,252 @@ class Forwarder:
             transport=self._transport,
             follow_redirects=False,
         ) as client_http:
+            if pinned_api_key_id is not None:
+                # Pinned key mode: used by "sticky" resource bindings (e.g. GET status by job_id).
+                # We must not switch keys here, otherwise upstream may return 404 for resources created by
+                # another key. Still enforce per-key rate-limit and concurrency gates to avoid bypassing
+                # governance when callers provide pinned_api_key_id.
+                try:
+                    pinned_key = (
+                        db.query(ApiKey)
+                        .filter(
+                            ApiKey.id == int(pinned_api_key_id),
+                            ApiKey.client_id == client.id,
+                        )
+                        .one_or_none()
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "db.pinned_key_lookup_failed",
+                        extra={
+                            "fields": {
+                                "request_id": request_id,
+                                "client_id": client.id,
+                                "api_key_id": pinned_api_key_id,
+                            }
+                        },
+                    )
+                    raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+                if pinned_key is None or (not pinned_key.is_active) or pinned_key.status == "disabled":
+                    pinned_api_key_id = None
+                else:
+                    last_api_key_id = pinned_key.id
+                    if self._metrics is not None:
+                        self._metrics.record_key_selected(pinned_key.id)
+
+                    for attempt in range(total_attempts):
+                        allowed, retry_after = self._key_rate_limiter.allow(
+                            str(pinned_key.id), pinned_key.rate_limit_per_min
+                        )
+                        if not allowed:
+                            raise FcamError(
+                                status_code=503,
+                                code="ALL_KEYS_BUSY",
+                                message="All keys busy or rate-limited",
+                                retry_after=retry_after,
+                                details={
+                                    "client_id": client.id,
+                                    "api_key_id": pinned_key.id,
+                                    "base_url": self._config.firecrawl.base_url,
+                                    "attempts": total_attempts,
+                                    "method": method,
+                                    "upstream_path": upstream_path,
+                                },
+                            )
+
+                        lease = self._key_concurrency.try_acquire(str(pinned_key.id), pinned_key.max_concurrent)
+                        if lease is None:
+                            raise FcamError(
+                                status_code=503,
+                                code="ALL_KEYS_BUSY",
+                                message="All keys busy or rate-limited",
+                                details={
+                                    "client_id": client.id,
+                                    "api_key_id": pinned_key.id,
+                                    "base_url": self._config.firecrawl.base_url,
+                                    "attempts": total_attempts,
+                                    "method": method,
+                                    "upstream_path": upstream_path,
+                                },
+                            )
+
+                        try:
+                            try:
+                                plaintext_api_key = decrypt_api_key(
+                                    self._master_key, pinned_key.api_key_ciphertext
+                                )
+                            except (InvalidTag, ValueError):
+                                self._disable_key_decrypt_failed(db, pinned_key)
+                                raise FcamError(
+                                    status_code=503,
+                                    code="KEY_DECRYPT_FAILED",
+                                    message="Failed to decrypt API key; check FCAM_MASTER_KEY",
+                                ) from None
+
+                            upstream_headers = dict(safe_headers)
+                            upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
+                            for hk in list(upstream_headers.keys()):
+                                if hk.lower() in _DROP_REQUEST_HEADERS and hk.lower() != "authorization":
+                                    upstream_headers.pop(hk, None)
+
+                            resp = client_http.request(
+                                method=method,
+                                url=upstream_path,
+                                headers=upstream_headers,
+                                json=json_body,
+                            )
+                            last_upstream_status = resp.status_code
+                            if attempt > 0:
+                                retry_count = attempt
+
+                        except httpx.TimeoutException as exc:
+                            self._record_failure(db, pinned_key, reason="timeout")
+                            if attempt >= total_attempts - 1:
+                                logger.info(
+                                    "upstream.timeout",
+                                    extra={
+                                        "fields": {
+                                            "request_id": request_id,
+                                            "api_key_id": pinned_key.id,
+                                        }
+                                    },
+                                )
+                                raise FcamError(
+                                    status_code=504,
+                                    code="UPSTREAM_TIMEOUT",
+                                    message="Upstream timeout",
+                                    details={
+                                        "base_url": self._config.firecrawl.base_url,
+                                        "timeout_s": self._config.firecrawl.timeout,
+                                        "attempts": total_attempts,
+                                        "method": method,
+                                        "upstream_path": upstream_path,
+                                    },
+                                ) from exc
+                            continue
+
+                        except httpx.HTTPError as exc:
+                            self._record_failure(db, pinned_key, reason="http_error")
+                            if attempt >= total_attempts - 1:
+                                logger.info(
+                                    "upstream.unavailable",
+                                    extra={
+                                        "fields": {
+                                            "request_id": request_id,
+                                            "api_key_id": pinned_key.id,
+                                        }
+                                    },
+                                )
+                                raise FcamError(
+                                    status_code=503,
+                                    code="UPSTREAM_UNAVAILABLE",
+                                    message="Upstream unavailable",
+                                    details={
+                                        "base_url": self._config.firecrawl.base_url,
+                                        "attempts": total_attempts,
+                                        "method": method,
+                                        "upstream_path": upstream_path,
+                                        "error": str(exc),
+                                    },
+                                ) from exc
+                            continue
+                        finally:
+                            lease.release()
+
+                        if resp.status_code == 429:
+                            cooldown = _parse_retry_after(resp.headers) or self._config.rate_limit.cooldown_seconds
+                            self._mark_cooling(db, pinned_key, cooldown)
+                            return ForwardResult(
+                                response=_to_fastapi_response(resp),
+                                upstream_status_code=last_upstream_status,
+                                api_key_id=last_api_key_id,
+                                retry_count=retry_count,
+                            )
+
+                        if resp.status_code in {401, 403}:
+                            self._disable_key(db, pinned_key, resp.status_code)
+                            return ForwardResult(
+                                response=_to_fastapi_response(resp),
+                                upstream_status_code=last_upstream_status,
+                                api_key_id=last_api_key_id,
+                                retry_count=retry_count,
+                            )
+
+                        if resp.status_code >= 500:
+                            self._record_failure(db, pinned_key, reason="upstream_5xx")
+                            if attempt >= total_attempts - 1:
+                                return ForwardResult(
+                                    response=_to_fastapi_response(resp),
+                                    upstream_status_code=last_upstream_status,
+                                    api_key_id=last_api_key_id,
+                                    retry_count=retry_count,
+                                )
+                            continue
+
+                        credit_changed = False
+                        if 200 <= resp.status_code < 300:
+                            if (
+                                self._config.credit_monitoring.enabled
+                                and self._config.credit_monitoring.local_estimation.enabled
+                                and self._config.credit_monitoring.local_estimation.sync_on_request
+                                and method.upper() != "GET"
+                            ):
+                                try:
+                                    from app.core.credit_estimator import (
+                                        CREDIT_COST_MAP,
+                                        estimate_credit_cost,
+                                        normalize_endpoint,
+                                    )
+
+                                    endpoint = normalize_endpoint(upstream_path)
+                                    if endpoint in CREDIT_COST_MAP and pinned_key.cached_remaining_credits is not None:
+                                        response_data = None
+                                        content_type = (resp.headers.get("content-type") or "").lower()
+                                        if content_type.startswith("application/json"):
+                                            try:
+                                                response_data = resp.json()
+                                            except Exception:
+                                                response_data = None
+
+                                        cost = estimate_credit_cost(endpoint, response_data)
+                                        old_remaining = int(pinned_key.cached_remaining_credits)
+                                        new_remaining = max(0, old_remaining - int(cost))
+                                        if new_remaining != old_remaining:
+                                            pinned_key.cached_remaining_credits = new_remaining
+                                            credit_changed = True
+                                except Exception:
+                                    logger.exception(
+                                        "credit.local_estimation_failed",
+                                        extra={
+                                            "fields": {
+                                                "request_id": request_id,
+                                                "api_key_id": pinned_key.id,
+                                                "upstream_path": upstream_path,
+                                                "method": method,
+                                            }
+                                        },
+                                    )
+
+                            if self._config.quota.count_mode == "success":
+                                self._consume_quota_on_success(db, client, pinned_key)
+                            elif credit_changed:
+                                try:
+                                    db.commit()
+                                except Exception:
+                                    db.rollback()
+                                    logger.exception(
+                                        "db.credit_local_update_commit_failed",
+                                        extra={"fields": {"request_id": request_id, "api_key_id": pinned_key.id}},
+                                    )
+
+                        return ForwardResult(
+                            response=_to_fastapi_response(resp),
+                            upstream_status_code=last_upstream_status,
+                            api_key_id=last_api_key_id,
+                            retry_count=retry_count,
+                        )
+
             max_selection_tries = max(total_attempts * 20, 50)
             upstream_attempts = 0
             selection_tries = 0
@@ -349,8 +596,61 @@ class Forwarder:
                         )
                     continue
 
-                if 200 <= resp.status_code < 300 and self._config.quota.count_mode == "success":
-                    self._consume_quota_on_success(db, client, key)
+                credit_changed = False
+                if 200 <= resp.status_code < 300:
+                    if (
+                        self._config.credit_monitoring.enabled
+                        and self._config.credit_monitoring.local_estimation.enabled
+                        and self._config.credit_monitoring.local_estimation.sync_on_request
+                        and method.upper() != "GET"
+                    ):
+                        try:
+                            from app.core.credit_estimator import (
+                                CREDIT_COST_MAP,
+                                estimate_credit_cost,
+                                normalize_endpoint,
+                            )
+
+                            endpoint = normalize_endpoint(upstream_path)
+                            if endpoint in CREDIT_COST_MAP and key.cached_remaining_credits is not None:
+                                response_data = None
+                                content_type = (resp.headers.get("content-type") or "").lower()
+                                if content_type.startswith("application/json"):
+                                    try:
+                                        response_data = resp.json()
+                                    except Exception:
+                                        response_data = None
+
+                                cost = estimate_credit_cost(endpoint, response_data)
+                                old_remaining = int(key.cached_remaining_credits)
+                                new_remaining = max(0, old_remaining - int(cost))
+                                if new_remaining != old_remaining:
+                                    key.cached_remaining_credits = new_remaining
+                                    credit_changed = True
+                        except Exception:
+                            logger.exception(
+                                "credit.local_estimation_failed",
+                                extra={
+                                    "fields": {
+                                        "request_id": request_id,
+                                        "api_key_id": key.id,
+                                        "upstream_path": upstream_path,
+                                        "method": method,
+                                    }
+                                },
+                            )
+
+                    if self._config.quota.count_mode == "success":
+                        self._consume_quota_on_success(db, client, key)
+                    elif credit_changed:
+                        try:
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+                            logger.exception(
+                                "db.credit_local_update_commit_failed",
+                                extra={"fields": {"request_id": request_id, "api_key_id": key.id}},
+                            )
 
                 return ForwardResult(
                     response=_to_fastapi_response(resp),

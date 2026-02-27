@@ -105,6 +105,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_decrease(self):
         """TC-CE-006: 减少本地额度"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -130,6 +131,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_increase(self):
         """测试增加本地额度"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -151,6 +153,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_not_initialized(self):
         """TC-CE-007: 缓存未初始化时跳过"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -173,6 +176,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_lower_bound_zero(self):
         """TC-CE-008: 额度下限为 0"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -195,6 +199,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_no_change(self):
         """测试额度无变化时不提交"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -217,6 +222,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_commit_failure(self):
         """测试提交失败时回滚"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 
@@ -241,6 +247,7 @@ class TestUpdateLocalCredits:
     def test_update_local_credits_zero_delta(self):
         """测试 delta 为 0 的情况"""
         from unittest.mock import MagicMock
+
         from app.core.credit_estimator import update_local_credits
         from app.db.models import ApiKey
 

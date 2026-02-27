@@ -50,7 +50,17 @@ class KeyEncryptionConfig(BaseModel):
 class RequestLimitsConfig(BaseModel):
     max_body_bytes: int = 1_048_576
     allowed_paths: list[str] = Field(
-        default_factory=lambda: ["scrape", "crawl", "search", "agent", "map", "extract", "batch"]
+        default_factory=lambda: [
+            "scrape",
+            "crawl",
+            "search",
+            "agent",
+            "map",
+            "extract",
+            "batch",
+            "browser",
+            "team",
+        ]
     )
 
 
@@ -71,6 +81,43 @@ class QuotaConfig(BaseModel):
 
 class RateLimitConfig(BaseModel):
     cooldown_seconds: int = 60
+
+
+class CreditMonitoringSmartRefreshConfig(BaseModel):
+    enabled: bool = True
+    high_usage_interval: int = 15
+    medium_usage_interval: int = 30
+    normal_usage_interval: int = 60
+    low_usage_interval: int = 120
+
+
+class CreditMonitoringFixedRefreshConfig(BaseModel):
+    interval_minutes: int = 60
+
+
+class CreditMonitoringLocalEstimationConfig(BaseModel):
+    enabled: bool = True
+    sync_on_request: bool = True
+
+
+class CreditMonitoringConfig(BaseModel):
+    enabled: bool = False
+    smart_refresh: CreditMonitoringSmartRefreshConfig = Field(
+        default_factory=CreditMonitoringSmartRefreshConfig
+    )
+    fixed_refresh: CreditMonitoringFixedRefreshConfig = Field(
+        default_factory=CreditMonitoringFixedRefreshConfig
+    )
+    batch_size: int = 10
+    batch_delay_seconds: int = 5
+    local_estimation: CreditMonitoringLocalEstimationConfig = Field(
+        default_factory=CreditMonitoringLocalEstimationConfig
+    )
+    retention_days: int = 90
+    retry_delay_minutes: int = 10
+    refresh_check_interval_seconds: int = 300
+    min_manual_refresh_interval_seconds: int = 300
+    history_max_limit: int = 500
 
 
 class IdempotencyConfig(BaseModel):
@@ -124,6 +171,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     quota: QuotaConfig = Field(default_factory=QuotaConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    credit_monitoring: CreditMonitoringConfig = Field(default_factory=CreditMonitoringConfig)
     idempotency: IdempotencyConfig = Field(default_factory=IdempotencyConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

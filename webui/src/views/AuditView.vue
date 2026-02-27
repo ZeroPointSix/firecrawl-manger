@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { NButton, NCard, NDataTable, NInput, NSelect, NSpace, useMessage } from "naive-ui";
+import { NButton, NCard, NCheckboxGroup, NDataTable, NDropdown, NInput, NSelect, NSpace, useMessage } from "naive-ui";
 import { computed, h, onMounted, reactive, ref, watch } from "vue";
 
 import { fetchAuditLogs, type AuditLogItem } from "@/api/logs";
 import { getFcamErrorMessage } from "@/api/http";
 import { adminToken } from "@/state/adminAuth";
+import { formatTimestamp } from "@/utils/time";
 
 const message = useMessage();
 
@@ -107,8 +108,60 @@ watch(() => [filters.action, filters.resource_type, filters.resource_id, pageSiz
   reloadTimer = setTimeout(() => void reload(), 350);
 });
 
+// 列选择功能
+const STORAGE_KEY_VISIBLE_COLUMNS = "fcam_audit_visible_columns";
+
+const allColumnKeys = [
+  "created_at",
+  "action",
+  "resource_type",
+  "resource_id",
+  "ip",
+  "user_agent",
+];
+
+const columnLabels: Record<string, string> = {
+  created_at: "时间",
+  action: "操作",
+  resource_type: "资源类型",
+  resource_id: "资源ID",
+  ip: "IP地址",
+  user_agent: "User Agent",
+};
+
+// 从 localStorage 加载可见列配置
+function loadVisibleColumns(): string[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY_VISIBLE_COLUMNS);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  // 默认显示所有列
+  return [...allColumnKeys];
+}
+
+const visibleColumns = ref<string[]>(loadVisibleColumns());
+
+// 保存可见列配置到 localStorage
+watch(visibleColumns, (cols) => {
+  try {
+    localStorage.setItem(STORAGE_KEY_VISIBLE_COLUMNS, JSON.stringify(cols));
+  } catch {
+    // ignore
+  }
+}, { deep: true });
+
 const columns = [
-  { title: "时间", key: "created_at", width: 190 },
+  {
+    title: "时间",
+    key: "created_at",
+    width: 170,
+    render: (row: AuditLogItem) => formatTimestamp(row.created_at)
+  },
   { title: "action", key: "action", width: 220 },
   { title: "resource_type", key: "resource_type", width: 130 },
   { title: "resource_id", key: "resource_id", width: 140 },
@@ -119,12 +172,37 @@ const columns = [
     render: (row: AuditLogItem) => h("span", { style: "color: var(--text-tertiary)" }, row.user_agent || "-"),
   },
 ];
+
+// 根据用户选择过滤列
+const filteredColumns = computed(() => {
+  return columns.filter(col => visibleColumns.value.includes(col.key));
+});
+
+// 列选择选项
+const columnOptions = computed(() => {
+  return allColumnKeys.map(key => ({
+    label: columnLabels[key] || key,
+    value: key,
+  }));
+});
 </script>
 
 <template>
   <n-card title="审计日志" size="small">
     <template #header-extra>
       <n-space>
+        <n-dropdown trigger="click">
+          <template #trigger>
+            <n-button size="small">列</n-button>
+          </template>
+          <div style="padding: 12px; min-width: 200px">
+            <n-checkbox-group v-model:value="visibleColumns">
+              <n-space vertical>
+                <n-checkbox v-for="opt in columnOptions" :key="opt.value" :value="opt.value" :label="opt.label" />
+              </n-space>
+            </n-checkbox-group>
+          </div>
+        </n-dropdown>
         <n-button size="small" :loading="loading" @click="reload">刷新</n-button>
       </n-space>
     </template>
@@ -138,7 +216,7 @@ const columns = [
       </n-space>
 
       <n-data-table
-        :columns="columns as any"
+        :columns="filteredColumns as any"
         :data="currentLogs"
         :loading="loading"
         :pagination="false"

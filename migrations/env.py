@@ -13,7 +13,9 @@ from app.db.session import build_database_url
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Avoid disabling existing loggers (e.g. `app.*`) which can make pytest log capture (caplog)
+    # order-dependent when Alembic is exercised in the same test session.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

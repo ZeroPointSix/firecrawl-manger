@@ -59,8 +59,8 @@
 
 补充：Firecrawl 的 credits 更偏“账期/周期”口径；本项目的 `daily_quota`/`quota_reset_at` 属于网关内部治理字段。
 
-### 1.6 通用错误体（网关自建错误）
-> 说明：`/api/*` 在“上游透传模式”下，上游错误通常**不包装**（保持 Firecrawl 兼容）。只有当错误由网关产生（鉴权/限流/无 Key/网关校验失败等）时，返回以下格式。
+### 1.6 控制面错误体（/admin/*，网关自建错误）
+> 说明：控制面接口（`/admin/*`）由 FCAM 自身定义；当错误由网关产生（鉴权/校验/DB 不可用等）时，返回以下格式（响应体包含 `request_id`）。
 
 ```json
 {
@@ -81,6 +81,24 @@
 - `error.code`：稳定枚举，便于调用方做自动化处理
 - `error.message`：人类可读
 - `error.details`：可选，结构化信息（不包含敏感数据）
+
+### 1.6.1 数据面/兼容层错误体（/api/*、/v1/*、/v2/*，Firecrawl 兼容）
+> 说明：这些接口以 Firecrawl 兼容为目标：
+> - **上游错误**：通常透传（不包装）
+> - **网关自身产生的错误**（鉴权/限流/配额/无 Key/校验失败等）：返回 Firecrawl 兼容结构（仍会在响应头带 `X-Request-Id`；429 类错误会带 `Retry-After`）
+
+```json
+{
+  "success": false,
+  "error": "Missing or invalid client token",
+  "code": "CLIENT_UNAUTHORIZED"
+}
+```
+
+字段说明：
+- `success`：固定为 `false`
+- `error`：人类可读消息
+- `code`：稳定枚举，便于调用方做自动化处理
 
 ### 1.7 分页约定（日志类接口）
 日志类接口采用 **游标分页**（按 `id` 倒序）：
@@ -308,6 +326,7 @@
       "id": 1,
       "name": "service-a",
       "is_active": true,
+      "status": "active",
 
       "daily_quota": 1000,
       "daily_usage": 12,
@@ -344,6 +363,7 @@
     "id": 1,
     "name": "service-a",
     "is_active": true,
+    "status": "active",
     "daily_quota": 1000,
     "daily_usage": 0,
     "quota_reset_at": "2026-02-10",
@@ -374,12 +394,15 @@
 
 **Response 200**：返回更新后的 client。
 
-### 2.10 DELETE /admin/clients/{id} — 删除/禁用调用方
+### 2.10 DELETE /admin/clients/{id} — 软删除调用方（隐藏）
 **Auth**：Admin
 
 **Response 204**
 
-> 建议实现为“软禁用”（`is_active=false`），避免历史日志失联。
+说明：
+- 网关会将该 Client 标记为 `status="deleted"` 且 `is_active=false`
+- 默认 `GET /admin/clients` 会过滤 `status="deleted"` 的记录（避免 UI 列表混淆）
+- 如需永久删除（并解除关联），使用 `/admin/clients/{id}/purge`
 
 ### 2.11 POST /admin/clients/{id}/rotate — 轮换调用方 token（仅返回一次）
 **Auth**：Admin
@@ -408,7 +431,7 @@
 - `action`：操作类型
   - `enable`：批量启用
   - `disable`：批量禁用
-  - `delete`：批量删除（软删除，设置 `is_active=false`）
+  - `delete`：批量删除（软删除，设置 `status="deleted"` 且 `is_active=false`；默认列表会过滤）
 
 **Response 200**
 ```json
@@ -595,11 +618,148 @@
 }
 ```
 
+### 2.16 GET /admin/keys/{id}/credits — 查询 Key 额度
+**Auth**：Admin
+
+**Response 200**
+```json
+{
+  "key_id": 1,
+  "api_key_masked": "fc-****5678",
+  "cached_remaining_credits": 8500,
+  "last_snapshot": {
+    "id": 123,
+    "remaining_credits": 8500,
+    "scraped_this_month": 1500,
+    "created_at": "2026-02-27T10:30:00Z"
+  },
+  "next_refresh_at": "2026-02-27T11:00:00Z"
+}
+```
+
+**Response 404**：Key 不存在
+
+---
+
+### 2.17 GET /admin/clients/{id}/credits — 查询 Client 聚合额度
+**Auth**：Admin
+
+**Response 200**
+```json
+{
+  "client_id": 1,
+  "client_name": "业务服务A",
+  "total_remaining_credits": 25000,
+  "keys": [
+    {
+      "key_id": 1,
+      "api_key_masked": "fc-****5678",
+      "cached_remaining_credits": 8500,
+      "last_snapshot_at": "2026-02-27T10:30:00Z"
+    },
+    {
+      "key_id": 2,
+      "api_key_masked": "fc-****9012",
+      "cached_remaining_credits": 16500,
+      "last_snapshot_at": "2026-02-27T10:25:00Z"
+    }
+  ]
+}
+```
+
+**Response 404**：Client 不存在
+
+---
+
+### 2.18 GET /admin/keys/{id}/credits/history — 查询 Key 额度历史
+**Auth**：Admin
+
+**Query**
+- `days`：查询天数（默认 7，最大 90）
+
+**Response 200**
+```json
+{
+  "key_id": 1,
+  "api_key_masked": "fc-****5678",
+  "snapshots": [
+    {
+      "id": 125,
+      "remaining_credits": 8200,
+      "scraped_this_month": 1800,
+      "created_at": "2026-02-27T12:00:00Z"
+    },
+    {
+      "id": 124,
+      "remaining_credits": 8350,
+      "scraped_this_month": 1650,
+      "created_at": "2026-02-27T11:30:00Z"
+    },
+    {
+      "id": 123,
+      "remaining_credits": 8500,
+      "scraped_this_month": 1500,
+      "created_at": "2026-02-27T10:30:00Z"
+    }
+  ]
+}
+```
+
+**Response 404**：Key 不存在
+
+---
+
+### 2.19 POST /admin/keys/{id}/credits/refresh — 手动刷新 Key 额度
+**Auth**：Admin
+
+**Response 200**
+```json
+{
+  "key_id": 1,
+  "api_key_masked": "fc-****5678",
+  "remaining_credits": 8200,
+  "scraped_this_month": 1800,
+  "snapshot_id": 126,
+  "refreshed_at": "2026-02-27T12:30:00Z"
+}
+```
+
+**Response 404**：Key 不存在
+**Response 500**：上游 API 调用失败
+
+---
+
+### 2.20 POST /admin/keys/credits/refresh-all — 批量刷新所有 Key 额度
+**Auth**：Admin
+
+**Response 200**
+```json
+{
+  "total": 10,
+  "success": 8,
+  "failed": 2,
+  "results": [
+    {
+      "key_id": 1,
+      "api_key_masked": "fc-****5678",
+      "status": "success",
+      "remaining_credits": 8200
+    },
+    {
+      "key_id": 3,
+      "api_key_masked": "fc-****3456",
+      "status": "failed",
+      "error": "Upstream API timeout"
+    }
+  ]
+}
+```
+
 ---
 
 ## 3. 数据面（/api/*）— 转发端点（兼容 Firecrawl）
-> 说明：这些接口的 **成功响应与上游错误响应**默认“透传”。  
-> 网关仅在“自身拦截/治理失败/无 Key”等场景返回 1.6 的错误体。
+> 说明：这些接口的 **成功响应与上游错误响应**默认"透传"。
+> 网关仅在"自身拦截/治理失败/无 Key"等场景返回 1.6 的错误体。
 
 ### 3.0 Firecrawl 兼容层（/v1/*，用于 SDK 迁移）
 **Auth**：Client
@@ -620,12 +780,19 @@
 - `POST /v2/scrape`
 - `POST /v2/crawl`
 - `GET  /v2/crawl/{id}`
+- `GET  /v2/crawl/active`
+- `POST /v2/crawl/params-preview`
 - `POST /v2/map`
 - `POST /v2/search`
 - `POST /v2/extract`
 - `POST /v2/agent`
 - `POST /v2/batch/scrape`
 - `GET  /v2/batch/scrape/{id}`
+- `GET  /v2/team/credit-usage`
+- `GET  /v2/team/queue-status`
+- `GET  /v2/team/credit-usage/historical`
+- `GET  /v2/team/token-usage`
+- `GET  /v2/team/token-usage/historical`
 
 并提供少量别名（为兼容 `start/status` 形态，网关会重写到主路径并在必要时回退）：
 - `POST /v2/crawl/start` ↔ `POST /v2/crawl`

@@ -146,10 +146,20 @@ def agent(
         request_id=request.state.request_id,
         client=client,
         method="POST",
-        upstream_path="/v1/agent",
+        upstream_path="/v2/agent",
         json_body=payload,
         inbound_headers=dict(request.headers),
     )
+    if result.response.status_code in {404, 405}:
+        result = _forwarder(request).forward(
+            db=db,
+            request_id=request.state.request_id,
+            client=client,
+            method="POST",
+            upstream_path="/v1/agent",
+            json_body=payload,
+            inbound_headers=dict(request.headers),
+        )
     request.state.api_key_id = result.api_key_id
     request.state.retry_count = result.retry_count
     idempotency_complete(db=db, config=request.app.state.config, ctx=ctx, response=result.response)

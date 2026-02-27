@@ -35,4 +35,6 @@ def test_data_plane_can_be_disabled(tmp_path):
         resp = client.post("/api/scrape", json={"url": "https://example.com"}, headers={"Authorization": "Bearer x"})
 
     assert resp.status_code == 404
-    assert resp.json()["error"]["code"] == "NOT_FOUND"
+    body = resp.json()
+    assert body["success"] is False
+    assert body["error"] == "Not found"

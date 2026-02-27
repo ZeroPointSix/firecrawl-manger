@@ -13,7 +13,7 @@ from starlette.responses import Response
 
 from app.core.redact import redact_data
 from app.db.models import RequestLog
-from app.errors import FcamError, build_error_response
+from app.errors import FcamError, build_error_response, build_proxy_error_response, is_proxy_path
 from app.observability.logging import request_id_ctx
 from app.observability.metrics import RequestMetrics
 
@@ -80,6 +80,19 @@ def _dump_error_details(value: Any) -> str | None:
         if isinstance(safe, dict):
             base = {k: safe.get(k) for k in ("code", "message") if k in safe}
         base["truncated"] = True
+        # `message` 可能非常大（例如上游返回超长 body preview），必须在这里也做裁剪，
+        # 否则即使 preview 缩短，最终 `json.dumps(base)` 仍可能超过上限。
+        msg = base.get("message")
+        if msg is not None:
+            try:
+                msg_text = msg if isinstance(msg, str) else json.dumps(msg, ensure_ascii=False)
+            except Exception:
+                msg_text = str(msg)
+            if len(msg_text) > 400:
+                base["message"] = msg_text[:400]
+                base["message_truncated"] = True
+            else:
+                base["message"] = msg_text
 
         preview_len = min(len(text), _MAX_ERROR_DETAILS_CHARS)
         for _ in range(5):
@@ -90,7 +103,10 @@ def _dump_error_details(value: Any) -> str | None:
                 return dumped
             preview_len = max(int(preview_len * 0.6), 0)
 
-        return json.dumps(base, ensure_ascii=False)
+        dumped_base = json.dumps(base, ensure_ascii=False)
+        if len(dumped_base) <= _MAX_ERROR_DETAILS_CHARS:
+            return dumped_base
+        return json.dumps({"truncated": True}, ensure_ascii=False)
     except Exception:
         return None
 
@@ -275,6 +291,8 @@ class FcamErrorMiddleware(BaseHTTPMiddleware):
                     }
                 },
             )
+            if is_proxy_path(request.url.path):
+                return build_proxy_error_response(request_id, exc)
             return build_error_response(request_id, exc)
 
 

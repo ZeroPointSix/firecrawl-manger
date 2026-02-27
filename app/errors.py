@@ -73,6 +73,45 @@ def build_error_response(request_id: str, exc: FcamError) -> JSONResponse:
     )
 
 
+def _firecrawl_json_error(
+    *,
+    request_id: str,
+    status_code: int,
+    code: str | None = None,
+    message: str,
+    retry_after: int | None = None,
+) -> JSONResponse:
+    headers: dict[str, str] = {"X-Request-Id": request_id}
+    if retry_after is not None:
+        headers["Retry-After"] = str(int(retry_after))
+    content: dict[str, object] = {"success": False, "error": str(message)}
+    if code:
+        content["code"] = str(code)
+    return JSONResponse(
+        status_code=int(status_code),
+        content=content,
+        headers=headers,
+    )
+
+
+def _is_proxy_path(path: str) -> bool:
+    return path.startswith("/api/") or path.startswith("/v1/") or path.startswith("/v2/")
+
+
+def is_proxy_path(path: str) -> bool:
+    return _is_proxy_path(path)
+
+
+def build_proxy_error_response(request_id: str, exc: FcamError) -> JSONResponse:
+    return _firecrawl_json_error(
+        request_id=request_id,
+        status_code=exc.status_code,
+        code=exc.code,
+        message=exc.message,
+        retry_after=exc.retry_after,
+    )
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(FcamError)
     async def _handle_fcam_error(request: Request, exc: FcamError) -> JSONResponse:
@@ -96,6 +135,14 @@ def register_exception_handlers(app: FastAPI) -> None:
                 }
             },
         )
+        if _is_proxy_path(request.url.path):
+            return _firecrawl_json_error(
+                request_id=request_id,
+                status_code=exc.status_code,
+                code=exc.code,
+                message=exc.message,
+                retry_after=exc.retry_after,
+            )
         return build_error_response(request_id, exc)
 
     @app.exception_handler(RequestValidationError)
@@ -118,6 +165,13 @@ def register_exception_handlers(app: FastAPI) -> None:
                 }
             },
         )
+        if _is_proxy_path(request.url.path):
+            return _firecrawl_json_error(
+                request_id=request_id,
+                status_code=400,
+                code="VALIDATION_ERROR",
+                message="Invalid request parameters",
+            )
         return _json_error(
             request_id=request_id,
             status_code=400,
@@ -148,6 +202,13 @@ def register_exception_handlers(app: FastAPI) -> None:
                 }
             },
         )
+        if _is_proxy_path(request.url.path):
+            return _firecrawl_json_error(
+                request_id=request_id,
+                status_code=exc.status_code,
+                code=code,
+                message=message,
+            )
         return _json_error(request_id=request_id, status_code=exc.status_code, code=code, message=message)
 
     @app.exception_handler(Exception)
@@ -169,6 +230,13 @@ def register_exception_handlers(app: FastAPI) -> None:
                 }
             },
         )
+        if _is_proxy_path(request.url.path):
+            return _firecrawl_json_error(
+                request_id=request_id,
+                status_code=500,
+                code="UNKNOWN_ERROR",
+                message="An unexpected error occurred on the server.",
+            )
         return _json_error(
             request_id=request_id,
             status_code=500,
