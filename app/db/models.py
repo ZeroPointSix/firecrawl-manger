@@ -58,10 +58,20 @@ class ApiKey(Base):
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
 
+    last_credit_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_credit_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cached_remaining_credits: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cached_plan_credits: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
 
     client: Mapped["Client | None"] = relationship(back_populates="api_keys")
     request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="api_key")
+    credit_snapshots: Mapped[list["CreditSnapshot"]] = relationship(
+        back_populates="api_key",
+        cascade="all, delete-orphan",
+    )
 
 
 class Client(Base):
@@ -82,6 +92,8 @@ class Client(Base):
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
 
     api_keys: Mapped[list[ApiKey]] = relationship(back_populates="client")
     request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="client")
@@ -116,6 +128,29 @@ class RequestLog(Base):
     api_key: Mapped[ApiKey | None] = relationship(back_populates="request_logs")
 
 
+class CreditSnapshot(Base):
+    __tablename__ = "credit_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    api_key_id: Mapped[int] = mapped_column(
+        ForeignKey("api_keys.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    remaining_credits: Mapped[int] = mapped_column(Integer, nullable=False)
+    plan_credits: Mapped[int] = mapped_column(Integer, nullable=False)
+    billing_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    billing_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    snapshot_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+    )
+    fetch_success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    api_key: Mapped["ApiKey"] = relationship(back_populates="credit_snapshots")
+
+
 class IdempotencyRecord(Base):
     __tablename__ = "idempotency_records"
     __table_args__ = (UniqueConstraint("client_id", "idempotency_key", name="uq_idempotency_client_key"),)
@@ -135,6 +170,33 @@ class IdempotencyRecord(Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     client: Mapped[Client] = relationship(back_populates="idempotency_records")
+
+
+class UpstreamResourceBinding(Base):
+    __tablename__ = "upstream_resource_bindings"
+    __table_args__ = (
+        UniqueConstraint(
+            "client_id",
+            "resource_type",
+            "resource_id",
+            name="uq_upstream_resource_binding",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    client_id: Mapped[int] = mapped_column(ForeignKey("clients.id"), nullable=False)
+    api_key_id: Mapped[int] = mapped_column(ForeignKey("api_keys.id"), nullable=False)
+
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+    )
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    client: Mapped[Client] = relationship()
+    api_key: Mapped[ApiKey] = relationship()
 
 
 class AuditLog(Base):
