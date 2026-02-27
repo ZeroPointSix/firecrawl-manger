@@ -37,19 +37,26 @@ def aggregate_client_credits(db: Session, client_id: int) -> dict[str, Any]:
         remaining = int(key.cached_remaining_credits or 0)
         plan = int(key.cached_plan_credits or 0)
 
-        # 获取该 Key 的第一条快照作为初始总额度
-        first_snapshot = (
-            db.query(CreditSnapshot)
-            .filter(CreditSnapshot.api_key_id == key.id, CreditSnapshot.fetch_success.is_(True))
-            .order_by(CreditSnapshot.snapshot_at.asc())
-            .first()
-        )
-
+        # 计算总额度的优先级：
+        # 1. 如果有 plan_credits（付费账户），使用 plan_credits
+        # 2. 否则，从第一条快照获取初始 remaining_credits（免费账户）
+        # 3. 如果都没有，使用当前的 remaining_credits
         total_credits = None
-        if first_snapshot is not None:
-            total_credits = first_snapshot.remaining_credits
-        elif remaining is not None:
-            total_credits = remaining
+        if plan > 0:
+            # 付费账户：使用 plan_credits
+            total_credits = plan
+        else:
+            # 免费账户：从第一条快照获取初始额度
+            first_snapshot = (
+                db.query(CreditSnapshot)
+                .filter(CreditSnapshot.api_key_id == key.id, CreditSnapshot.fetch_success.is_(True))
+                .order_by(CreditSnapshot.snapshot_at.asc())
+                .first()
+            )
+            if first_snapshot is not None:
+                total_credits = first_snapshot.remaining_credits
+            elif remaining is not None:
+                total_credits = remaining
 
         total_remaining += remaining
         total_plan += plan
@@ -114,12 +121,19 @@ def get_key_credits(db: Session, key_id: int) -> dict[str, Any]:
     if cached_remaining is not None and latest_snapshot is not None:
         is_estimated = int(cached_remaining) != int(latest_snapshot.remaining_credits)
 
-    # 计算总额度：使用第一条快照的 remaining_credits 作为初始总额度
-    # 如果没有历史快照，使用当前的 remaining_credits
+    # 计算总额度的优先级：
+    # 1. 如果有 cached_plan_credits（付费账户），使用 plan_credits
+    # 2. 否则，从第一条快照获取初始 remaining_credits（免费账户）
+    # 3. 如果都没有，使用当前的 remaining_credits
     total_credits = None
-    if first_snapshot is not None:
+    if cached_plan and cached_plan > 0:
+        # 付费账户：使用 plan_credits
+        total_credits = cached_plan
+    elif first_snapshot is not None:
+        # 免费账户：从第一条快照获取初始额度
         total_credits = first_snapshot.remaining_credits
     elif cached_remaining is not None:
+        # 兜底：使用当前剩余额度
         total_credits = cached_remaining
 
     result: dict[str, Any] = {
