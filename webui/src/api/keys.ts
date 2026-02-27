@@ -20,6 +20,15 @@ export type KeyItem = {
   total_requests: number;
   last_used_at: string | null;
   created_at: string;
+  last_credit_snapshot_id: number | null;
+  last_credit_check_at: string | null;
+  cached_remaining_credits: number | null;
+  cached_plan_credits: number | null;
+  cached_total_credits?: number | null;
+  cached_is_estimated?: boolean;
+  billing_period_start?: string | null;
+  billing_period_end?: string | null;
+  next_refresh_at: string | null;
 };
 
 export type Pagination = {

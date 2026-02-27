@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_config, get_db, get_secrets, require_admin
 from app.config import AppConfig, Secrets
+from app.core.batch_clients import apply_batch_action_to_client, deduplicate_client_ids
 from app.core.key_import import parse_keys_text
 from app.core.security import (
     decrypt_api_key,
@@ -27,7 +28,7 @@ from app.core.security import (
     mask_api_key_last4,
 )
 from app.core.time import today_in_timezone
-from app.db.models import ApiKey, AuditLog, Client, IdempotencyRecord, RequestLog
+from app.db.models import ApiKey, AuditLog, Client, CreditSnapshot, IdempotencyRecord, RequestLog
 from app.errors import FcamError
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,25 @@ def _audit(
 
 def _key_item(key: ApiKey, *, request: Request) -> dict[str, Any]:
     current_concurrent = request.app.state.key_concurrency.current(str(key.id))
+
+    # 计算总额度：从第一条快照获取
+    cached_total_credits = None
+    try:
+        db = request.app.state.db_session_factory()
+        first_snapshot = (
+            db.query(CreditSnapshot)
+            .filter(CreditSnapshot.api_key_id == key.id, CreditSnapshot.fetch_success.is_(True))
+            .order_by(CreditSnapshot.snapshot_at.asc())
+            .first()
+        )
+        if first_snapshot is not None:
+            cached_total_credits = first_snapshot.remaining_credits
+        elif key.cached_remaining_credits is not None:
+            cached_total_credits = key.cached_remaining_credits
+        db.close()
+    except Exception:
+        pass
+
     return {
         "id": key.id,
         "client_id": key.client_id,
@@ -110,6 +130,12 @@ def _key_item(key: ApiKey, *, request: Request) -> dict[str, Any]:
         "total_requests": key.total_requests,
         "last_used_at": _dt_to_rfc3339(key.last_used_at),
         "created_at": _dt_to_rfc3339(key.created_at),
+        "last_credit_snapshot_id": key.last_credit_snapshot_id,
+        "last_credit_check_at": _dt_to_rfc3339(key.last_credit_check_at),
+        "cached_remaining_credits": key.cached_remaining_credits,
+        "cached_plan_credits": key.cached_plan_credits,
+        "cached_total_credits": cached_total_credits,
+        "next_refresh_at": _dt_to_rfc3339(key.next_refresh_at),
     }
 
 
@@ -118,6 +144,7 @@ def _client_item(client: Client) -> dict[str, Any]:
         "id": client.id,
         "name": client.name,
         "is_active": client.is_active,
+        "status": client.status,
         "daily_quota": client.daily_quota,
         "daily_usage": client.daily_usage,
         "quota_reset_at": _date_to_iso(client.quota_reset_at),
@@ -153,6 +180,11 @@ class UpdateKeyRequest(BaseModel):
 class TestKeyRequest(BaseModel):
     mode: str = "scrape"
     test_url: str = "https://example.com"
+
+
+class RefreshAllCreditsRequest(BaseModel):
+    key_ids: list[int] | None = Field(default=None, description="可选，不传则刷新所有活跃 Key")
+    force: bool = False
 
 
 class BatchKeyPatch(BaseModel):
@@ -245,7 +277,41 @@ def list_keys(
         use_pagination = page is not None or page_size is not None or (q_ is not None and q_.strip())
         if not use_pagination:
             keys = q.all()
-            return {"items": [_key_item(k, request=request) for k in keys]}
+            snapshot_ids = [int(k.last_credit_snapshot_id) for k in keys if k.last_credit_snapshot_id]
+            snapshot_by_id: dict[int, Any] = {}
+            if snapshot_ids:
+                rows = (
+                    db.query(
+                        CreditSnapshot.id,
+                        CreditSnapshot.remaining_credits,
+                        CreditSnapshot.billing_period_start,
+                        CreditSnapshot.billing_period_end,
+                    )
+                    .filter(CreditSnapshot.id.in_(snapshot_ids))
+                    .all()
+                )
+                snapshot_by_id = {int(r.id): r for r in rows}
+
+            items: list[dict[str, Any]] = []
+            for k in keys:
+                item = _key_item(k, request=request)
+                item["cached_is_estimated"] = False
+                item["billing_period_start"] = None
+                item["billing_period_end"] = None
+
+                sid = k.last_credit_snapshot_id
+                if sid is not None:
+                    snap = snapshot_by_id.get(int(sid))
+                    if snap is not None:
+                        item["billing_period_start"] = _dt_to_rfc3339(snap.billing_period_start)
+                        item["billing_period_end"] = _dt_to_rfc3339(snap.billing_period_end)
+                        if k.cached_remaining_credits is not None:
+                            item["cached_is_estimated"] = int(k.cached_remaining_credits) != int(
+                                snap.remaining_credits
+                            )
+
+                items.append(item)
+            return {"items": items}
 
         page_n = int(page or 1)
         page_size_n = int(page_size or 20)
@@ -257,8 +323,42 @@ def list_keys(
     except Exception as exc:
         logger.exception("db.keys_list_failed", extra={"fields": {"op": "keys_list"}})
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
+
+    snapshot_ids = [int(k.last_credit_snapshot_id) for k in keys if k.last_credit_snapshot_id]
+    snapshot_by_id: dict[int, Any] = {}
+    if snapshot_ids:
+        rows = (
+            db.query(
+                CreditSnapshot.id,
+                CreditSnapshot.remaining_credits,
+                CreditSnapshot.billing_period_start,
+                CreditSnapshot.billing_period_end,
+            )
+            .filter(CreditSnapshot.id.in_(snapshot_ids))
+            .all()
+        )
+        snapshot_by_id = {int(r.id): r for r in rows}
+
+    items: list[dict[str, Any]] = []
+    for k in keys:
+        item = _key_item(k, request=request)
+        item["cached_is_estimated"] = False
+        item["billing_period_start"] = None
+        item["billing_period_end"] = None
+
+        sid = k.last_credit_snapshot_id
+        if sid is not None:
+            snap = snapshot_by_id.get(int(sid))
+            if snap is not None:
+                item["billing_period_start"] = _dt_to_rfc3339(snap.billing_period_start)
+                item["billing_period_end"] = _dt_to_rfc3339(snap.billing_period_end)
+                if k.cached_remaining_credits is not None:
+                    item["cached_is_estimated"] = int(k.cached_remaining_credits) != int(snap.remaining_credits)
+
+        items.append(item)
+
     return {
-        "items": [_key_item(k, request=request) for k in keys],
+        "items": items,
         "pagination": {
             "page": page_n,
             "page_size": page_size_n,
@@ -621,6 +721,226 @@ def test_key(
     }
 
 
+@router.get("/keys/{key_id}/credits")
+def get_key_credits_api(
+    key_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from app.core.credit_aggregator import get_key_credits
+
+    try:
+        result = get_key_credits(db, key_id)
+    except ValueError:
+        raise FcamError(status_code=404, code="KEY_NOT_FOUND", message="API Key not found") from None
+
+    # 兼容：确保 key 列表字段一致（便于前端 table 复用）
+    try:
+        key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+        if key is not None:
+            result["key"] = _key_item(key, request=request)
+    except Exception:
+        pass
+
+    return result
+
+
+@router.get("/clients/{client_id}/credits")
+def get_client_credits_api(client_id: int, db: Session = Depends(get_db)) -> dict[str, Any]:
+    from app.core.credit_aggregator import aggregate_client_credits
+
+    try:
+        return aggregate_client_credits(db, client_id)
+    except ValueError as exc:
+        raise FcamError(status_code=404, code="CLIENT_NOT_FOUND", message=str(exc)) from exc
+
+
+@router.get("/keys/{key_id}/credits/history")
+def get_key_credits_history_api(
+    key_id: int,
+    db: Session = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+    limit: int = Query(default=100, ge=1),
+    since: str | None = Query(default=None),
+    until: str | None = Query(default=None),
+) -> dict[str, Any]:
+    key = db.query(ApiKey.id).filter(ApiKey.id == int(key_id)).one_or_none()
+    if key is None:
+        raise FcamError(status_code=404, code="KEY_NOT_FOUND", message="API Key not found")
+
+    limit_n = min(int(limit), int(config.credit_monitoring.history_max_limit or 500))
+
+    q = db.query(CreditSnapshot).filter(CreditSnapshot.api_key_id == int(key_id))
+    if since is not None and since.strip():
+        q = q.filter(CreditSnapshot.snapshot_at >= _parse_rfc3339(since.strip()))
+    if until is not None and until.strip():
+        q = q.filter(CreditSnapshot.snapshot_at <= _parse_rfc3339(until.strip()))
+
+    total_count = q.count()
+    snapshots = q.order_by(CreditSnapshot.snapshot_at.desc()).limit(limit_n).all()
+
+    return {
+        "api_key_id": int(key_id),
+        "snapshots": [
+            {
+                "remaining_credits": s.remaining_credits,
+                "plan_credits": s.plan_credits,
+                "billing_period_start": _dt_to_rfc3339(s.billing_period_start),
+                "billing_period_end": _dt_to_rfc3339(s.billing_period_end),
+                "snapshot_at": _dt_to_rfc3339(s.snapshot_at),
+                "fetch_success": s.fetch_success,
+                "error_message": s.error_message,
+            }
+            for s in snapshots
+        ],
+        "total_count": int(total_count),
+    }
+
+
+@router.post("/keys/{key_id}/credits/refresh")
+async def refresh_key_credits_api(
+    key_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+    secrets: Secrets = Depends(get_secrets),
+) -> dict[str, Any]:
+    if not secrets.master_key:
+        raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
+
+    key = db.query(ApiKey).filter(ApiKey.id == int(key_id)).one_or_none()
+    if key is None:
+        raise FcamError(status_code=404, code="KEY_NOT_FOUND", message="API Key not found")
+
+    min_interval = int(config.credit_monitoring.min_manual_refresh_interval_seconds)
+    if not min_interval:
+        min_interval = 300
+
+    now = datetime.now(timezone.utc)
+    if key.last_credit_check_at is not None:
+        last = key.last_credit_check_at
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        elapsed = (now - last).total_seconds()
+        if elapsed < min_interval:
+            raise FcamError(
+                status_code=429,
+                code="REFRESH_TOO_FREQUENT",
+                message=f"Please wait {int(min_interval - elapsed)} seconds before refreshing again",
+            )
+
+    from app.core.credit_fetcher import fetch_credit_from_firecrawl
+
+    master_key_bytes = derive_master_key_bytes(secrets.master_key)
+    rid = f"manual-credit-refresh-{key_id}-{int(now.timestamp())}"
+    snapshot = await fetch_credit_from_firecrawl(
+        db=db,
+        key=key,
+        master_key=master_key_bytes,
+        config=config,
+        request_id=rid,
+    )
+
+    return {
+        "api_key_id": key.id,
+        "snapshot": {
+            "remaining_credits": snapshot.remaining_credits,
+            "plan_credits": snapshot.plan_credits,
+            "snapshot_at": _dt_to_rfc3339(snapshot.snapshot_at),
+            "fetch_success": snapshot.fetch_success,
+        },
+    }
+
+
+@router.post("/keys/credits/refresh-all")
+async def refresh_all_credits_api(
+    request: Request,
+    payload: RefreshAllCreditsRequest = Body(default_factory=RefreshAllCreditsRequest),
+    db: Session = Depends(get_db),
+    config: AppConfig = Depends(get_config),
+    secrets: Secrets = Depends(get_secrets),
+) -> dict[str, Any]:
+    if not secrets.master_key:
+        raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
+
+    ids = [int(x) for x in (payload.key_ids or []) if int(x) > 0]
+
+    q = db.query(ApiKey).filter(ApiKey.is_active.is_(True))
+    if ids:
+        q = q.filter(ApiKey.id.in_(ids))
+    keys = q.order_by(ApiKey.id.asc()).all()
+
+    from app.core.credit_fetcher import fetch_credit_from_firecrawl
+
+    master_key_bytes = derive_master_key_bytes(secrets.master_key)
+    now = datetime.now(timezone.utc)
+    min_interval = int(config.credit_monitoring.min_manual_refresh_interval_seconds or 300)
+
+    results: list[dict[str, Any]] = []
+    success = 0
+    failed = 0
+
+    for key in keys:
+        if not payload.force and key.last_credit_check_at is not None:
+            last = key.last_credit_check_at
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            if (now - last).total_seconds() < min_interval:
+                failed += 1
+                results.append(
+                    {
+                        "api_key_id": key.id,
+                        "success": False,
+                        "error": "REFRESH_TOO_FREQUENT",
+                    }
+                )
+                continue
+
+        rid = f"batch-credit-refresh-{key.id}-{int(now.timestamp())}"
+        try:
+            snapshot = await fetch_credit_from_firecrawl(
+                db=db,
+                key=key,
+                master_key=master_key_bytes,
+                config=config,
+                request_id=rid,
+            )
+            success += 1
+            results.append(
+                {
+                    "api_key_id": key.id,
+                    "success": True,
+                    "remaining_credits": snapshot.remaining_credits,
+                    "plan_credits": snapshot.plan_credits,
+                }
+            )
+        except FcamError as exc:
+            failed += 1
+            results.append(
+                {
+                    "api_key_id": key.id,
+                    "success": False,
+                    "error": f"{exc.code}: {exc.message}",
+                }
+            )
+        except Exception as exc:
+            failed += 1
+            results.append(
+                {
+                    "api_key_id": key.id,
+                    "success": False,
+                    "error": str(exc),
+                }
+            )
+
+    return {
+        "total": len(keys),
+        "success": int(success),
+        "failed": int(failed),
+        "results": results,
+    }
+
+
 @router.post("/keys/batch")
 def batch_keys(
     request: Request,
@@ -815,7 +1135,8 @@ def reset_keys_quota(
 @router.get("/clients")
 def list_clients(db: Session = Depends(get_db)) -> dict[str, Any]:
     try:
-        clients = db.query(Client).order_by(Client.id.desc()).all()
+        # 默认过滤掉 status="deleted" 的记录
+        clients = db.query(Client).filter(Client.status != "deleted").order_by(Client.id.desc()).all()
     except Exception as exc:
         logger.exception("db.clients_list_failed", extra={"fields": {"op": "clients_list"}})
         raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
@@ -842,6 +1163,7 @@ def create_client(
         name=payload.name,
         token_hash=token_hash,
         is_active=payload.is_active,
+        status="active" if payload.is_active else "disabled",
         daily_quota=payload.daily_quota,
         daily_usage=0,
         quota_reset_at=today,
@@ -874,7 +1196,7 @@ def update_client(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     client = db.query(Client).filter(Client.id == client_id).one_or_none()
-    if client is None:
+    if client is None or client.status == "deleted":
         raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
 
     data = payload.model_dump(exclude_unset=True)
@@ -885,7 +1207,9 @@ def update_client(
     if "max_concurrent" in data:
         client.max_concurrent = data["max_concurrent"]
     if "is_active" in data:
-        client.is_active = data["is_active"]
+        desired_active = bool(data["is_active"])
+        client.is_active = desired_active
+        client.status = "active" if desired_active else "disabled"
 
     try:
         _audit(db, request=request, action="client.update", resource_type="client", resource_id=str(client.id))
@@ -906,6 +1230,8 @@ def delete_client(request: Request, client_id: int, db: Session = Depends(get_db
         raise FcamError(status_code=404, code="NOT_FOUND", message="Not found")
 
     client.is_active = False
+    if client.status != "deleted":
+        client.status = "deleted"
     try:
         _audit(db, request=request, action="client.delete", resource_type="client", resource_id=str(client.id))
         db.commit()
@@ -984,7 +1310,7 @@ def batch_update_clients(
     """批量操作 Client（启用、禁用、删除）"""
 
     # 去重 client_ids
-    unique_client_ids = list(set(payload.client_ids))
+    unique_client_ids = deduplicate_client_ids(payload.client_ids)
 
     success_count = 0
     failed_count = 0
@@ -1012,13 +1338,7 @@ def batch_update_clients(
             client = client_map[client_id]
 
             try:
-                if payload.action == BatchAction.ENABLE:
-                    client.is_active = True
-                elif payload.action == BatchAction.DISABLE:
-                    client.is_active = False
-                elif payload.action == BatchAction.DELETE:
-                    # 软删除：设置 is_active = False
-                    client.is_active = False
+                apply_batch_action_to_client(client, action=payload.action.value)
 
                 success_count += 1
 
@@ -1031,12 +1351,9 @@ def batch_update_clients(
                     resource_id=str(client.id),
                 )
 
-            except Exception as e:
+            except Exception as exc:
                 failed_count += 1
-                failed_items.append({
-                    "client_id": client_id,
-                    "error": str(e)
-                })
+                failed_items.append({"client_id": client_id, "error": str(exc)})
 
         # 提交事务
         db.commit()

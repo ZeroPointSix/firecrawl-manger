@@ -6,7 +6,10 @@ import {
   NCheckbox,
   NCheckboxGroup,
   NDataTable,
+  NDivider,
   NDropdown,
+  NDrawer,
+  NDrawerContent,
   NForm,
   NFormItem,
   NInput,
@@ -15,6 +18,7 @@ import {
   NListItem,
   NModal,
   NPopover,
+  NProgress,
   NSelect,
   NSpace,
   NTag,
@@ -23,11 +27,15 @@ import {
 } from "naive-ui";
 import { computed, h, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
+import { getClientCredits, getKeyCredits, refreshAllCredits, type ClientCreditsInfo, type CreditInfo } from "@/api/credits";
 import { batchUpdateClients, createClient, fetchClients, rotateClientToken, updateClient, type ClientItem } from "@/api/clients";
 import { fetchEncryptionStatus, type EncryptionStatus } from "@/api/dashboard";
 import { batchKeys, createKey, fetchKeys, importKeysText, purgeKey, testKey, updateKey, type KeyItem } from "@/api/keys";
 import { getFcamErrorMessage } from "@/api/http";
 import { adminToken, verifyAdminToken } from "@/state/adminAuth";
+import CreditDisplay from "@/components/CreditDisplay.vue";
+import CreditTrendChart from "@/components/CreditTrendChart.vue";
+import { formatDate, formatRelativeTime, formatTimestamp } from "@/utils/time";
 
 const message = useMessage();
 const dialog = useDialog();
@@ -50,7 +58,25 @@ const keyTotalItems = ref(0);
 const keyNameSearch = ref("");
 const encryption = ref<EncryptionStatus | null>(null);
 
+const loadingClientCredits = ref(false);
+const clientCredits = ref<ClientCreditsInfo | null>(null);
+const refreshingCredits = ref(false);
+
+const showCreditsDrawer = ref(false);
+const creditsDrawerKey = ref<KeyItem | null>(null);
+const creditsDrawerInfo = ref<CreditInfo | null>(null);
+const loadingCreditsDrawer = ref(false);
+
 const selectedClient = computed(() => clients.value.find((c) => c.id === selectedClientId.value) || null);
+const clientUsagePercentage = computed(() => clientCredits.value?.usage_percentage ?? 0);
+const clientUsageStatus = computed(() => {
+  const info = clientCredits.value;
+  if (!info || !info.total_credits) return "default";
+  const remainingPct = (info.total_remaining_credits / info.total_credits) * 100;
+  if (remainingPct < 20) return "error";
+  if (remainingPct < 50) return "warning";
+  return "success";
+});
 
 const filteredClients = computed(() => {
   const q = clientSearch.value.trim().toLowerCase();
@@ -111,7 +137,7 @@ async function loadClients() {
   if (!adminToken.value) return;
   loadingClients.value = true;
   try {
-    clients.value = (await fetchClients()).filter((c) => c.is_active);
+    clients.value = await fetchClients();
     if (!clients.value.length) {
       selectedClientId.value = null;
       return;
@@ -152,6 +178,23 @@ async function loadKeys() {
   }
 }
 
+async function loadClientCredits() {
+  if (!adminToken.value) return;
+  if (!selectedClientId.value) {
+    clientCredits.value = null;
+    return;
+  }
+  loadingClientCredits.value = true;
+  try {
+    clientCredits.value = await getClientCredits(selectedClientId.value);
+  } catch (err: unknown) {
+    clientCredits.value = null;
+    message.warning(getFcamErrorMessage(err));
+  } finally {
+    loadingClientCredits.value = false;
+  }
+}
+
 async function loadEncryptionStatus() {
   if (!adminToken.value) return;
   loadingEncryption.value = true;
@@ -179,6 +222,7 @@ onMounted(async () => {
   await loadClients();
   await loadEncryptionStatus();
   await loadKeys();
+  await loadClientCredits();
 });
 
 onBeforeUnmount(() => {
@@ -197,6 +241,7 @@ watch(adminToken, async (token) => {
     keyNameSearch.value = "";
     selectedClientId.value = null;
     encryption.value = null;
+    clientCredits.value = null;
     return;
   }
 
@@ -204,11 +249,13 @@ watch(adminToken, async (token) => {
   await loadClients();
   await loadEncryptionStatus();
   await loadKeys();
+  await loadClientCredits();
 });
 
 watch(selectedClientId, async () => {
   keyPage.value = 1;
   await loadKeys();
+  await loadClientCredits();
 });
 
 let keyReloadTimer: ReturnType<typeof setTimeout> | undefined;
@@ -527,6 +574,33 @@ async function handleBatchDelete() {
       }
     }
   });
+}
+
+// ---- Batch Client Selection ----
+const allClientsSelected = computed(() => {
+  if (filteredClients.value.length === 0) return false;
+  return filteredClients.value.every(c => checkedClientIds.value.includes(c.id));
+});
+
+const someClientsSelected = computed(() => {
+  if (checkedClientIds.value.length === 0) return false;
+  return !allClientsSelected.value;
+});
+
+function handleSelectAll(checked: boolean) {
+  if (checked) {
+    checkedClientIds.value = filteredClients.value.map(c => c.id);
+  } else {
+    checkedClientIds.value = [];
+  }
+}
+
+function selectAllClients() {
+  checkedClientIds.value = filteredClients.value.map(c => c.id);
+}
+
+function deselectAllClients() {
+  checkedClientIds.value = [];
 }
 
 // ---- Create Key modal ----
@@ -1057,6 +1131,48 @@ async function submitTestKey() {
   }
 }
 
+async function refreshCreditsForCurrentKeys() {
+  if (!selectedClientId.value) return;
+  refreshingCredits.value = true;
+  try {
+    const keyIds = checkedKeyRowKeys.value.length
+      ? checkedKeyRowKeys.value.slice()
+      : keys.value.map((k) => k.id);
+
+    const res = await refreshAllCredits({ key_ids: keyIds });
+    if (res.failed) {
+      message.warning(`额度刷新完成：成功 ${res.success}，失败 ${res.failed}`, { duration: 5000 });
+    } else {
+      message.success(`额度刷新完成：成功 ${res.success}`);
+    }
+    await loadKeys();
+    await loadClientCredits();
+  } catch (err: unknown) {
+    message.error(getFcamErrorMessage(err), { duration: 5000 });
+  } finally {
+    refreshingCredits.value = false;
+  }
+}
+
+async function loadCreditsDrawer(keyId: number) {
+  loadingCreditsDrawer.value = true;
+  try {
+    creditsDrawerInfo.value = await getKeyCredits(keyId);
+  } catch (err: unknown) {
+    creditsDrawerInfo.value = null;
+    message.error(getFcamErrorMessage(err), { duration: 5000 });
+  } finally {
+    loadingCreditsDrawer.value = false;
+  }
+}
+
+function openCreditsDrawer(row: KeyItem) {
+  creditsDrawerKey.value = row;
+  creditsDrawerInfo.value = null;
+  showCreditsDrawer.value = true;
+  void loadCreditsDrawer(row.id);
+}
+
 type KeyColumnConfig = {
   key: string;
   title: string;
@@ -1111,6 +1227,48 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
     render: (row: KeyItem) => `${row.daily_usage}/${row.daily_quota}`,
   },
   {
+    key: "credits",
+    title: "额度",
+    width: 320,
+    defaultVisible: true,
+    render: (row: KeyItem) =>
+      h(CreditDisplay, {
+        keyId: row.id,
+        remainingCredits: row.cached_remaining_credits,
+        planCredits: row.cached_plan_credits,
+        totalCredits: row.cached_total_credits,
+        lastUpdateAt: row.last_credit_check_at,
+        isEstimated: row.cached_is_estimated ?? false,
+        onRefresh: () => {
+          void loadKeys();
+          void loadClientCredits();
+          if (creditsDrawerKey.value?.id === row.id) void loadCreditsDrawer(row.id);
+        },
+      }),
+  },
+  {
+    key: "billing_period",
+    title: "账期",
+    width: 210,
+    defaultVisible: true,
+    render: (row: KeyItem) => {
+      if (!row.billing_period_start || !row.billing_period_end) return "-";
+      return `${formatDate(row.billing_period_start)} ~ ${formatDate(row.billing_period_end)}`;
+    },
+  },
+  {
+    key: "next_refresh_at",
+    title: "下次刷新",
+    width: 170,
+    defaultVisible: true,
+    render: (row: KeyItem) =>
+      h(
+        "span",
+        { title: formatTimestamp(row.next_refresh_at) },
+        formatRelativeTime(row.next_refresh_at)
+      ),
+  },
+  {
     key: "cooldown_until",
     title: "Cooldown",
     width: 170,
@@ -1146,6 +1304,7 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
           trigger: "click",
           options: [
             { label: "测试", key: "test" },
+            { label: "额度详情", key: "credits" },
             { label: "编辑", key: "edit" },
             { label: row.is_active ? "禁用" : "启用", key: "toggle" },
             { label: "轮换", key: "rotate" },
@@ -1154,6 +1313,7 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
           ] as any,
           onSelect: (action: string) => {
             if (action === "test") openTestKey(row);
+            if (action === "credits") openCreditsDrawer(row);
             if (action === "edit") openEditKey(row);
             if (action === "toggle") void onToggleKeyActive(row);
             if (action === "rotate") openRotateKey(row);
@@ -1316,7 +1476,15 @@ function rowKey(row: KeyItem) {
                 </n-space>
               </div>
 
-              <n-button type="primary" size="small" @click="showCreateClient = true">创建 Client</n-button>
+              <!-- 未选择时显示全选按钮 -->
+              <n-space align="center">
+                <n-checkbox
+                  :checked="allClientsSelected"
+                  :indeterminate="someClientsSelected"
+                  @update:checked="handleSelectAll"
+                />
+                <n-button type="primary" size="small" @click="showCreateClient = true">创建 Client</n-button>
+              </n-space>
             </n-space>
           </div>
 
@@ -1389,6 +1557,23 @@ function rowKey(row: KeyItem) {
                 </n-space>
               </template>
 
+              <n-space vertical size="small" style="margin-bottom: 8px">
+                <n-space align="center" justify="space-between">
+                  <div class="muted" style="font-size: 12px">Client 额度汇总</div>
+                  <n-button size="tiny" :loading="loadingClientCredits" @click="loadClientCredits">刷新汇总</n-button>
+                </n-space>
+                <n-progress type="line" :percentage="clientUsagePercentage" :status="clientUsageStatus as any" :height="10" />
+                <div class="muted" style="font-size: 12px">
+                  <template v-if="clientCredits">
+                    剩余 {{ clientCredits.total_remaining_credits.toLocaleString() }} / {{ (clientCredits.total_credits || 0).toLocaleString() }}
+                    （已用 {{ clientUsagePercentage.toFixed(2) }}%）
+                  </template>
+                  <template v-else>暂无额度数据（可先刷新额度）。</template>
+                </div>
+              </n-space>
+
+              <n-divider />
+
               <n-space wrap>
                 <n-button type="primary" size="small" @click="showCreateKey = true">添加 Key</n-button>
                 <n-button size="small" @click="showImportKeys = true">文本导入</n-button>
@@ -1408,6 +1593,14 @@ function rowKey(row: KeyItem) {
                   @click="onPurgeSelected"
                 >
                   永久删除所选（{{ checkedKeyRowKeys.length }}）
+                </n-button>
+                <n-button
+                  size="small"
+                  :loading="refreshingCredits"
+                  :disabled="!keys.length"
+                  @click="refreshCreditsForCurrentKeys"
+                >
+                  刷新额度（{{ checkedKeyRowKeys.length ? `所选 ${checkedKeyRowKeys.length}` : "当前页" }}）
                 </n-button>
                 <n-input
                   v-model:value="keyNameSearch"
@@ -1812,5 +2005,35 @@ function rowKey(row: KeyItem) {
         </n-space>
       </n-card>
     </n-modal>
+
+    <n-drawer v-model:show="showCreditsDrawer" :width="860">
+      <n-drawer-content :title="`额度详情（${creditsDrawerKey?.api_key_masked ?? '-' }）`">
+        <n-space vertical size="large">
+          <n-alert v-if="loadingCreditsDrawer" type="info" title="加载中">正在加载额度信息...</n-alert>
+
+          <credit-display
+            v-if="creditsDrawerKey"
+            :key-id="creditsDrawerKey.id"
+            :remaining-credits="creditsDrawerInfo?.cached_credits.remaining_credits ?? creditsDrawerKey.cached_remaining_credits"
+            :plan-credits="creditsDrawerInfo?.cached_credits.plan_credits ?? creditsDrawerKey.cached_plan_credits"
+            :total-credits="creditsDrawerInfo?.cached_credits.total_credits ?? creditsDrawerKey.cached_total_credits"
+            :last-update-at="creditsDrawerInfo?.cached_credits.last_updated_at ?? creditsDrawerKey.last_credit_check_at"
+            :is-estimated="creditsDrawerInfo?.cached_credits.is_estimated ?? false"
+            @refresh="() => {
+              if (creditsDrawerKey) void loadCreditsDrawer(creditsDrawerKey.id);
+              void loadKeys();
+              void loadClientCredits();
+            }"
+          />
+
+          <n-alert v-if="creditsDrawerInfo?.latest_snapshot" type="default" title="最新快照（真实值）">
+            <pre style="white-space: pre-wrap; margin: 0">{{ JSON.stringify(creditsDrawerInfo.latest_snapshot, null, 2) }}</pre>
+          </n-alert>
+
+          <n-divider />
+          <credit-trend-chart v-if="creditsDrawerKey" :key-id="creditsDrawerKey.id" />
+        </n-space>
+      </n-drawer-content>
+    </n-drawer>
   </n-space>
 </template>
