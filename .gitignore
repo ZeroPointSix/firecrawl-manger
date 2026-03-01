@@ -51,6 +51,11 @@ docs/BUG/
 docs/Opt/
 docs/project/
 
+# Non-essential documentation
+AGENTS.md
+CLAUDE.md
+RELEASE_NOTES_*.md
+
 # IDE and editor files
 .idea/
 *.swp
