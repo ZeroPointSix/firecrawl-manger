@@ -256,15 +256,12 @@ python scripts/cleanup.py
 4. `docs/docker.md` - Docker 部署指南
 
 **功能设计文档**：
-- `docs/PRD/2026-02-26-api-key-credit-monitoring.md` - 额度监控功能 PRD（详细设计）
-- `docs/FD/2026-02-26-api-key-credit-monitoring-fd.md` - 额度监控功能设计文档
-- `docs/TDD/2026-02-26-api-key-credit-monitoring-tdd.md` - 额度监控测试驱动设计
+- 额度监控功能已实现，详见代码和测试
 
 **其他文档**：
 - `docs/MVP/Firecrawl-API-Manager-PRD.md` - 产品需求文档
 - `docs/handbook.md` - 接入方/运维快速手册
 - `docs/WORKLOG.md` - 变更日志
-- `docs/TODO/README.md` - 实施待办清单
 
 ## 常见问题
 

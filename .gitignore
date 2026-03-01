@@ -31,3 +31,32 @@ app/ui2/
 
 # Windows reserved-name artifact that breaks some tools (e.g. ripgrep).
 nul
+
+# Development and temporary files
+TODO-list.md
+CODE_ANALYSIS/
+api-reference/
+response_bad.json
+test_credit_monitoring.py
+
+# Internal documentation (development process)
+.kiro/
+docs/IMPLEMENTATION_PROMPT.md
+docs/TODO/
+docs/PLAN/
+docs/PRD/
+docs/FD/
+docs/TDD/
+docs/BUG/
+docs/Opt/
+docs/project/
+
+# IDE and editor files
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db

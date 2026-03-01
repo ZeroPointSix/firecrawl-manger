@@ -500,6 +500,7 @@ PRD 写“每日 00:00 重置”，但必须补充时区：
 - `pytest --cov=app --cov-fail-under=80`
 - 任何失败策略表（第 14 节）中列出的场景必须有测试用例覆盖并可重复运行。
 
-## 19. 实施任务清单（执行入口）
-- 实施代办清单（TODO / Task List）：见 `docs/TODO/README.md`
-- 实施计划（PLAN）：见 `docs/PLAN/README.md`
+## 19. 开发与测试
+- 测试覆盖率要求：80%
+- `pytest --cov=app --cov-fail-under=80`
+- 任何失败策略表（第 14 节）中列出的场景必须有测试用例覆盖并可重复运行。
