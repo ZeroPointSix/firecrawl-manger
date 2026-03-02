@@ -6,6 +6,26 @@
 
 Firecrawl API Manager 是一个轻量级 HTTP 网关，用于集中管理多个 Firecrawl API Key，提供统一的转发入口、智能负载均衡、配额控制和完整审计。
 
+## 项目展示
+
+### 管理界面
+
+<div align="center">
+  <img src="IMG/PixPin_2026-03-01_22-25-24.png" alt="仪表盘概览" width="800"/>
+  <p><em>仪表盘 - 实时监控 API 使用情况和额度状态</em></p>
+</div>
+
+<div align="center">
+  <img src="IMG/PixPin_2026-03-01_22-25-40.png" alt="Key 和 Client 管理" width="800"/>
+  <p><em>Key 和 Client 管理 - 批量操作和配额控制</em></p>
+</div>
+
+<div align="center">
+  <img src="IMG/PixPin_2026-03-01_22-25-49.png" alt="请求日志和审计" width="800"/>
+  <p><em>请求日志 - 完整的审计追踪和错误分析</em></p>
+</div>
+
+
 ## 核心特性
 
 - **Key 池管理**: 集中管理多个 API Key，自动负载均衡和故障转移
