@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
@@ -25,7 +25,7 @@ def cleanup_retention(
     config: AppConfig,
     now: datetime | None = None,
 ) -> CleanupResult:
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     request_logs_deleted = 0
     audit_logs_deleted = 0
     idempotency_deleted = 0

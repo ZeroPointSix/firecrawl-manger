@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+
+
+def _utc_now() -> datetime:
+    """返回当前 UTC 时间（timezone-aware）"""
+    return datetime.now(timezone.utc)
 
 from sqlalchemy import (
     Boolean,
@@ -55,7 +60,7 @@ class ApiKey(Base):
     total_requests: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
 
     last_credit_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -89,7 +94,7 @@ class Client(Base):
     max_concurrent: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -121,7 +126,7 @@ class RequestLog(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
 
     client: Mapped[Client | None] = relationship(back_populates="request_logs")
@@ -143,7 +148,7 @@ class CreditSnapshot(Base):
     billing_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     snapshot_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
     fetch_success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -165,7 +170,7 @@ class IdempotencyRecord(Base):
     response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -191,7 +196,7 @@ class UpstreamResourceBinding(Base):
     resource_id: Mapped[str] = mapped_column(String(128), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -211,5 +216,5 @@ class AuditLog(Base):
     ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=datetime.utcnow
+        DateTime(timezone=True), nullable=False, default=_utc_now
     )

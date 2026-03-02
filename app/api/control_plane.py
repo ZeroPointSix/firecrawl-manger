@@ -1415,7 +1415,7 @@ def dashboard_stats(
     db: Session = Depends(get_db),
     client_id: int | None = Query(default=None),
 ) -> dict[str, Any]:
-    cutoff = datetime.utcnow() - timedelta(hours=24)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
 
     try:
         keys_q = db.query(ApiKey)
