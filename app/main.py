@@ -10,6 +10,7 @@ from starlette.responses import HTMLResponse, RedirectResponse
 
 from app.api.control_plane import router as control_plane_router
 from app.api.data_plane import router as data_plane_router
+from app.api.exa_compat import router as exa_compat_router
 from app.api.firecrawl_compat import router as firecrawl_compat_router
 from app.api.firecrawl_v2_compat import router as firecrawl_v2_compat_router
 from app.api.health import router as health_router
@@ -140,10 +141,12 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
         transport=None,
     )
 
+    exa_allowed = set(config.providers.exa.allowed_paths) if config.providers.exa.enabled else set()
     app.add_middleware(
         RequestLimitsMiddleware,
         max_body_bytes=config.security.request_limits.max_body_bytes,
         allowed_api_paths=set(config.security.request_limits.allowed_paths),
+        allowed_exa_paths=exa_allowed,
     )
     app.add_middleware(FcamErrorMiddleware)
     app.add_middleware(RequestIdMiddleware)
@@ -154,6 +157,8 @@ def create_app(*, config: AppConfig | None = None, secrets: Secrets | None = Non
         app.include_router(data_plane_router)
         app.include_router(firecrawl_compat_router)
         app.include_router(firecrawl_v2_compat_router)
+        if config.providers.exa.enabled:
+            app.include_router(exa_compat_router)
     if config.server.enable_control_plane:
         app.include_router(control_plane_router)
         ui2_dir = Path(__file__).resolve().parent / "ui2"

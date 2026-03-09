@@ -136,6 +136,7 @@ def _key_item(key: ApiKey, *, request: Request) -> dict[str, Any]:
         "cached_plan_credits": key.cached_plan_credits,
         "cached_total_credits": cached_total_credits,
         "next_refresh_at": _dt_to_rfc3339(key.next_refresh_at),
+        "provider": key.provider,
     }
 
 
@@ -155,6 +156,9 @@ def _client_item(client: Client) -> dict[str, Any]:
     }
 
 
+_VALID_PROVIDERS = {"firecrawl", "exa"}
+
+
 class CreateKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=8)
     client_id: int | None = Field(default=None, ge=0, description="0 means unassigned")
@@ -164,9 +168,12 @@ class CreateKeyRequest(BaseModel):
     max_concurrent: int = Field(default=2, ge=0)
     rate_limit_per_min: int = Field(default=10, ge=0)
     is_active: bool = True
+    provider: str = Field(default="firecrawl", max_length=32)
 
 
 class UpdateKeyRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     client_id: int | None = Field(default=None, ge=0, description="0 means unassigned")
     name: str | None = Field(default=None, max_length=255)
     plan_type: str | None = Field(default=None, max_length=32)
@@ -217,6 +224,7 @@ class ImportKeysTextRequest(BaseModel):
     max_concurrent: int = Field(default=2, ge=0)
     rate_limit_per_min: int = Field(default=10, ge=0)
     is_active: bool = True
+    provider: str = Field(default="firecrawl", max_length=32)
 
 
 class CreateClientRequest(BaseModel):
@@ -259,9 +267,12 @@ def list_keys(
     page: int | None = Query(default=None, ge=1),
     page_size: int | None = Query(default=None, ge=1, le=200),
     q_: str | None = Query(default=None, alias="q"),
+    provider: str | None = Query(default=None),
 ) -> dict[str, Any]:
     try:
         q = db.query(ApiKey).order_by(ApiKey.id.desc())
+        if provider is not None:
+            q = q.filter(ApiKey.provider == provider)
         if client_id is not None:
             if client_id == 0:
                 q = q.filter(ApiKey.client_id.is_(None))
@@ -379,6 +390,13 @@ def create_key(
     if not secrets.master_key:
         raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
 
+    if payload.provider not in _VALID_PROVIDERS:
+        raise FcamError(
+            status_code=400,
+            code="VALIDATION_ERROR",
+            message=f"Invalid provider '{payload.provider}'. Allowed: {', '.join(sorted(_VALID_PROVIDERS))}",
+        )
+
     client_id: int | None = None
     if payload.client_id is not None:
         client_id = None if payload.client_id == 0 else int(payload.client_id)
@@ -409,12 +427,13 @@ def create_key(
         quota_reset_at=today,
         max_concurrent=payload.max_concurrent,
         rate_limit_per_min=payload.rate_limit_per_min,
+        provider=payload.provider,
     )
 
     try:
         db.add(key)
         db.flush()
-        _audit(db, request=request, action="key.create", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.create", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
         db.commit()
         db.refresh(key)
     except IntegrityError as exc:
@@ -438,6 +457,13 @@ def import_keys_text(
 ) -> dict[str, Any]:
     if not secrets.master_key:
         raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
+
+    if payload.provider not in _VALID_PROVIDERS:
+        raise FcamError(
+            status_code=400,
+            code="VALIDATION_ERROR",
+            message=f"Invalid provider '{payload.provider}'. Allowed: {', '.join(sorted(_VALID_PROVIDERS))}",
+        )
 
     client_id: int | None = None
     if payload.client_id is not None:
@@ -489,6 +515,7 @@ def import_keys_text(
                     quota_reset_at=today,
                     max_concurrent=payload.max_concurrent,
                     rate_limit_per_min=payload.rate_limit_per_min,
+                    provider=payload.provider,
                 )
                 db.add(key)
                 db.flush()
@@ -496,7 +523,7 @@ def import_keys_text(
                     db,
                     request=request,
                     action="key.import_text.create",
-                    resource_type="api_key",
+                    resource_type=f"api_key:{key.provider}",
                     resource_id=str(key.id),
                 )
                 created += 1
@@ -545,7 +572,7 @@ def import_keys_text(
                             db,
                             request=request,
                             action="key.import_text.update",
-                            resource_type="api_key",
+                            resource_type=f"api_key:{existing.provider}",
                             resource_id=str(existing.id),
                         )
                         updated += 1
@@ -602,7 +629,7 @@ def update_key(
         key.api_key_ciphertext = ciphertext
         key.api_key_hash = api_key_hash
         key.api_key_last4 = last4
-        _audit(db, request=request, action="key.rotate", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.rotate", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
 
     if payload.name is not None:
         key.name = payload.name
@@ -624,7 +651,7 @@ def update_key(
             key.status = "active"
 
     try:
-        _audit(db, request=request, action="key.update", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.update", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
         db.commit()
         db.refresh(key)
     except IntegrityError as exc:
@@ -648,7 +675,7 @@ def delete_key(request: Request, key_id: int, db: Session = Depends(get_db)) -> 
     key.status = "disabled"
 
     try:
-        _audit(db, request=request, action="key.delete", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.delete", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -669,7 +696,7 @@ def purge_key(request: Request, key_id: int, db: Session = Depends(get_db)) -> R
             {RequestLog.api_key_id: None},
             synchronize_session=False,
         )
-        _audit(db, request=request, action="key.purge", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.purge", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
         db.delete(key)
         db.commit()
     except Exception as exc:
@@ -699,7 +726,7 @@ def test_key(
             mode=payload.mode,
             test_url=payload.test_url,
         )
-        _audit(db, request=request, action="key.test", resource_type="api_key", resource_id=str(key.id))
+        _audit(db, request=request, action="key.test", resource_type=f"api_key:{key.provider}", resource_id=str(key.id))
         db.commit()
         db.refresh(key)
     except FcamError:
@@ -727,6 +754,17 @@ def get_key_credits_api(
     request: Request,
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
+    if key is None:
+        raise FcamError(status_code=404, code="KEY_NOT_FOUND", message="API Key not found")
+
+    if key.provider != "firecrawl":
+        raise FcamError(
+            status_code=400,
+            code="UNSUPPORTED_PROVIDER_OPERATION",
+            message=f"Credit monitoring is not supported for provider '{key.provider}'",
+        )
+
     from app.core.credit_aggregator import get_key_credits
 
     try:
@@ -812,6 +850,13 @@ async def refresh_key_credits_api(
     if key is None:
         raise FcamError(status_code=404, code="KEY_NOT_FOUND", message="API Key not found")
 
+    if key.provider != "firecrawl":
+        raise FcamError(
+            status_code=400,
+            code="UNSUPPORTED_PROVIDER_OPERATION",
+            message=f"Credit refresh is not supported for provider '{key.provider}'",
+        )
+
     min_interval = int(config.credit_monitoring.min_manual_refresh_interval_seconds)
     if not min_interval:
         min_interval = 300
@@ -865,7 +910,7 @@ async def refresh_all_credits_api(
 
     ids = [int(x) for x in (payload.key_ids or []) if int(x) > 0]
 
-    q = db.query(ApiKey).filter(ApiKey.is_active.is_(True))
+    q = db.query(ApiKey).filter(ApiKey.is_active.is_(True), ApiKey.provider == "firecrawl")
     if ids:
         q = q.filter(ApiKey.id.in_(ids))
     keys = q.order_by(ApiKey.id.asc()).all()
@@ -960,6 +1005,27 @@ def batch_keys(
     if payload.test is not None and payload.test.mode != "scrape":
         raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported test mode")
 
+    # mixed-provider batch test: reject if keys span multiple providers
+    if payload.test is not None and len(ids) > 1:
+        key_providers = (
+            db.query(ApiKey.provider).filter(ApiKey.id.in_(ids)).distinct().all()
+        )
+        distinct_providers = {p[0] for p in key_providers}
+        if len(distinct_providers) > 1:
+            raise FcamError(
+                status_code=400,
+                code="MIXED_PROVIDER_BATCH",
+                message=f"Batch test does not support mixed providers: {', '.join(sorted(distinct_providers))}",
+            )
+
+    # provider field cannot be modified via batch patch
+    if patch_data and "provider" in patch_data:
+        raise FcamError(
+            status_code=400,
+            code="VALIDATION_ERROR",
+            message="Cannot modify provider via batch patch",
+        )
+
     for key_id in ids:
         try:
             key = db.query(ApiKey).filter(ApiKey.id == key_id).one_or_none()
@@ -1010,7 +1076,7 @@ def batch_keys(
                     db,
                     request=request,
                     action="key.batch",
-                    resource_type="api_key",
+                    resource_type=f"api_key:{key.provider}",
                     resource_id=str(key.id),
                 )
                 db.commit()
@@ -1060,7 +1126,7 @@ def batch_keys(
                         test_db,
                         request=request,
                         action="key.test",
-                        resource_type="api_key",
+                        resource_type=f"api_key:{key.provider}",
                         resource_id=str(key.id),
                     )
                     test_db.commit()

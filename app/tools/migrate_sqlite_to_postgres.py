@@ -348,7 +348,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parse_args(argv or sys.argv[1:])
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
 
     sqlite_path = args.sqlite_path or os.environ.get("FCAM_DATABASE__PATH")
     postgres_url = (

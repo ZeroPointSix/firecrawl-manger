@@ -29,6 +29,7 @@ export type KeyItem = {
   billing_period_start?: string | null;
   billing_period_end?: string | null;
   next_refresh_at: string | null;
+  provider: string;
 };
 
 export type Pagination = {
@@ -44,7 +45,7 @@ export type KeyListResponse = {
 };
 
 export async function fetchKeys(
-  opts: { clientId?: number; unassigned?: boolean; page?: number; pageSize?: number; q?: string } = {}
+  opts: { clientId?: number; unassigned?: boolean; page?: number; pageSize?: number; q?: string; provider?: string } = {}
 ) {
   const params: Record<string, number | string> = {};
   if (opts.unassigned) params.client_id = 0;
@@ -52,6 +53,7 @@ export async function fetchKeys(
   if (opts.page) params.page = opts.page;
   if (opts.pageSize) params.page_size = opts.pageSize;
   if (opts.q) params.q = opts.q;
+  if (opts.provider) params.provider = opts.provider;
   const res = await http.get<KeyListResponse>("/admin/keys", { params: Object.keys(params).length ? params : undefined });
   return res.data;
 }
@@ -65,6 +67,7 @@ export type CreateKeyRequest = {
   max_concurrent?: number;
   rate_limit_per_min?: number;
   is_active?: boolean;
+  provider?: string;
 };
 
 export async function createKey(payload: CreateKeyRequest) {
@@ -80,6 +83,7 @@ export type ImportKeysTextRequest = {
   max_concurrent?: number;
   rate_limit_per_min?: number;
   is_active?: boolean;
+  provider?: string;
 };
 
 export async function importKeysText(payload: ImportKeysTextRequest) {

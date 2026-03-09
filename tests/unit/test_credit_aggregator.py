@@ -22,6 +22,7 @@ def agg_db():
     yield session
     session.close()
     Base.metadata.drop_all(engine)
+    engine.dispose()
 
 
 @pytest.fixture

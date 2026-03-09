@@ -56,6 +56,7 @@ const keyPage = ref(1);
 const keyPageSize = ref(20);
 const keyTotalItems = ref(0);
 const keyNameSearch = ref("");
+const keyProviderFilter = ref<string | null>(null);
 const encryption = ref<EncryptionStatus | null>(null);
 
 const loadingClientCredits = ref(false);
@@ -167,6 +168,7 @@ async function loadKeys() {
       page: keyPage.value,
       pageSize: keyPageSize.value,
       q: keyNameSearch.value.trim() || undefined,
+      provider: keyProviderFilter.value || undefined,
     });
     keys.value = res.items;
     keyTotalItems.value = res.pagination?.total_items ?? res.items.length;
@@ -239,6 +241,7 @@ watch(adminToken, async (token) => {
     keyPageSize.value = 20;
     keyTotalItems.value = 0;
     keyNameSearch.value = "";
+    keyProviderFilter.value = null;
     selectedClientId.value = null;
     encryption.value = null;
     clientCredits.value = null;
@@ -265,6 +268,11 @@ watch(keyNameSearch, () => {
     keyPage.value = 1;
     void loadKeys();
   }, 350);
+});
+
+watch(keyProviderFilter, () => {
+  keyPage.value = 1;
+  void loadKeys();
 });
 
 async function copyText(text: string) {
@@ -614,6 +622,7 @@ const createKeyForm = reactive({
   max_concurrent: 2,
   rate_limit_per_min: 10,
   is_active: true,
+  provider: "firecrawl",
 });
 
 async function submitCreateKey() {
@@ -629,6 +638,7 @@ async function submitCreateKey() {
       max_concurrent: createKeyForm.max_concurrent,
       rate_limit_per_min: createKeyForm.rate_limit_per_min,
       is_active: createKeyForm.is_active,
+      provider: createKeyForm.provider,
     });
     message.success("Key 已创建");
     showCreateKey.value = false;
@@ -651,6 +661,7 @@ const importForm = reactive({
   max_concurrent: 2,
   rate_limit_per_min: 10,
   is_active: true,
+  provider: "firecrawl",
 });
 const importResult = ref<string>("");
 const importFailures = ref<Array<{ line_no: number; raw: string; message: string }>>([]);
@@ -669,6 +680,7 @@ async function submitImportKeys() {
       max_concurrent: importForm.max_concurrent,
       rate_limit_per_min: importForm.rate_limit_per_min,
       is_active: importForm.is_active,
+      provider: importForm.provider,
     });
     importResult.value = `created=${res.created}, updated=${res.updated}, skipped=${res.skipped}, failed=${res.failed}`;
     importFailures.value = res.failures || [];
@@ -944,6 +956,16 @@ async function submitBatchEditKeys() {
     return;
   }
 
+  // 混合 Provider 批量测试前端预检
+  if (batchForm.run_test) {
+    const selectedKeys = keys.value.filter((k) => ids.includes(k.id));
+    const providers = new Set(selectedKeys.map((k) => k.provider));
+    if (providers.size > 1) {
+      message.warning("不支持混合 Provider 的批量测试，请按 Provider 分开执行");
+      return;
+    }
+  }
+
   batchApplying.value = true;
   batchResult.value = null;
   try {
@@ -1135,9 +1157,15 @@ async function refreshCreditsForCurrentKeys() {
   if (!selectedClientId.value) return;
   refreshingCredits.value = true;
   try {
+    const firecrawlKeys = keys.value.filter((k) => k.provider === "firecrawl");
     const keyIds = checkedKeyRowKeys.value.length
-      ? checkedKeyRowKeys.value.slice()
-      : keys.value.map((k) => k.id);
+      ? checkedKeyRowKeys.value.filter((id) => firecrawlKeys.some((k) => k.id === id))
+      : firecrawlKeys.map((k) => k.id);
+
+    if (!keyIds.length) {
+      message.warning("当前无 Firecrawl Key 可刷新额度（Exa Key 不支持额度查询）");
+      return;
+    }
 
     const res = await refreshAllCredits({ key_ids: keyIds });
     if (res.failed) {
@@ -1198,6 +1226,14 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
   },
   { key: "name", title: "Name", width: 160, defaultVisible: true, render: (row: KeyItem) => row.name || "-" },
   { key: "plan_type", title: "Plan", width: 90, defaultVisible: true },
+  {
+    key: "provider",
+    title: "Provider",
+    width: 100,
+    defaultVisible: true,
+    render: (row: KeyItem) =>
+      h(NTag, { size: "small", type: row.provider === "exa" ? ("warning" as any) : ("info" as any) }, { default: () => row.provider }),
+  },
   {
     key: "status",
     title: "Status",
@@ -1304,7 +1340,7 @@ const allKeyColumnConfigs: KeyColumnConfig[] = [
           trigger: "click",
           options: [
             { label: "测试", key: "test" },
-            { label: "额度详情", key: "credits" },
+            ...(row.provider === "firecrawl" ? [{ label: "额度详情", key: "credits" }] : []),
             { label: "编辑", key: "edit" },
             { label: row.is_active ? "禁用" : "启用", key: "toggle" },
             { label: "轮换", key: "rotate" },
@@ -1597,7 +1633,7 @@ function rowKey(row: KeyItem) {
                 <n-button
                   size="small"
                   :loading="refreshingCredits"
-                  :disabled="!keys.length"
+                  :disabled="!keys.length || !keys.some(k => k.provider === 'firecrawl')"
                   @click="refreshCreditsForCurrentKeys"
                 >
                   刷新额度（{{ checkedKeyRowKeys.length ? `所选 ${checkedKeyRowKeys.length}` : "当前页" }}）
@@ -1608,6 +1644,17 @@ function rowKey(row: KeyItem) {
                   clearable
                   placeholder="按 name 搜索..."
                   style="width: 220px"
+                />
+                <n-select
+                  v-model:value="keyProviderFilter"
+                  size="small"
+                  clearable
+                  placeholder="Provider"
+                  :options="[
+                    { label: 'Firecrawl', value: 'firecrawl' },
+                    { label: 'Exa', value: 'exa' },
+                  ]"
+                  style="width: 130px"
                 />
                 <n-popover trigger="click" placement="bottom-end">
                   <template #trigger>
@@ -1708,7 +1755,10 @@ function rowKey(row: KeyItem) {
         <n-space vertical>
           <n-form label-placement="top" :model="createKeyForm">
             <n-form-item label="api_key">
-              <n-input v-model:value="createKeyForm.api_key" placeholder="fc-..." type="password" />
+              <n-input v-model:value="createKeyForm.api_key" placeholder="fc-... / exa-..." type="password" />
+            </n-form-item>
+            <n-form-item label="Provider">
+              <n-select v-model:value="createKeyForm.provider" :options="[{ label: 'firecrawl', value: 'firecrawl' }, { label: 'exa', value: 'exa' }]" />
             </n-form-item>
             <n-form-item label="name（可选）">
               <n-input v-model:value="createKeyForm.name" placeholder="k1" />
@@ -1745,6 +1795,9 @@ function rowKey(row: KeyItem) {
               <n-input v-model:value="importForm.text" type="textarea" :autosize="{ minRows: 6, maxRows: 14 }" />
             </n-form-item>
             <n-space>
+              <n-form-item label="Provider" style="min-width: 140px">
+                <n-select v-model:value="importForm.provider" :options="[{ label: 'firecrawl', value: 'firecrawl' }, { label: 'exa', value: 'exa' }]" />
+              </n-form-item>
               <n-form-item label="plan_type" style="min-width: 140px">
                 <n-select v-model:value="importForm.plan_type" :options="planOptions" />
               </n-form-item>

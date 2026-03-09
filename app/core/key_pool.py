@@ -45,12 +45,14 @@ class KeyPool:
         self._rr_index_by_scope: dict[str, int] = {}
         self._cooldown_store = cooldown_store or NoopCooldownStore()
 
-    def select(self, db: Session, config: AppConfig, *, client_id: int | None = None) -> SelectedKey:
+    def select(
+        self, db: Session, config: AppConfig, *, client_id: int | None = None, provider: str = "firecrawl"
+    ) -> SelectedKey:
         now = now_utc()
         today = today_in_timezone(config.quota.timezone)
 
         try:
-            q = db.query(ApiKey).order_by(ApiKey.id.asc())
+            q = db.query(ApiKey).filter(ApiKey.provider == provider).order_by(ApiKey.id.asc())
             if client_id is not None:
                 q = q.filter(ApiKey.client_id == client_id)
             keys = q.all()
@@ -77,7 +79,7 @@ class KeyPool:
         quota_seen = 0
         disabled_seen = 0
 
-        scope = f"client:{client_id}" if client_id is not None else "global"
+        scope = f"client:{client_id}:{provider}" if client_id is not None else f"global:{provider}"
         with self._lock:
             start = self._rr_index_by_scope.get(scope, 0) % len(keys)
 

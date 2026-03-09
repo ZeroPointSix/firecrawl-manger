@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _DROP_REQUEST_HEADERS = {
     "authorization",
+    "x-api-key",
     "host",
     "connection",
     "keep-alive",
@@ -156,6 +157,46 @@ class Forwarder:
         self._failure_lock = threading.Lock()
         self._failures: dict[int, tuple[int, datetime]] = {}
 
+    def _provider_base_url(self, provider: str) -> str:
+        """Return the upstream base URL for the given provider."""
+        if provider == "firecrawl":
+            return self._firecrawl_upstream_base_url
+        prov_cfg = getattr(self._config.providers, provider, None)
+        if prov_cfg is None or not prov_cfg.enabled:
+            raise FcamError(
+                status_code=400,
+                code="PROVIDER_NOT_CONFIGURED",
+                message=f"Provider '{provider}' is not configured or enabled",
+            )
+        return prov_cfg.base_url.rstrip("/")
+
+    def _provider_timeout(self, provider: str) -> httpx.Timeout:
+        """Return the timeout for the given provider."""
+        if provider == "firecrawl":
+            return httpx.Timeout(self._config.firecrawl.timeout)
+        prov_cfg = getattr(self._config.providers, provider, None)
+        if prov_cfg is not None:
+            return httpx.Timeout(prov_cfg.timeout)
+        return httpx.Timeout(self._config.firecrawl.timeout)
+
+    def _provider_max_retries(self, provider: str) -> int:
+        """Return the max retries for the given provider."""
+        if provider == "firecrawl":
+            return self._config.firecrawl.max_retries
+        prov_cfg = getattr(self._config.providers, provider, None)
+        if prov_cfg is not None:
+            return prov_cfg.max_retries
+        return self._config.firecrawl.max_retries
+
+    def _provider_auth_header(self, provider: str, plaintext_key: str) -> dict[str, str]:
+        """Return the auth header dict for the given provider."""
+        if provider == "firecrawl":
+            return {"authorization": f"Bearer {plaintext_key}"}
+        prov_cfg = getattr(self._config.providers, provider, None)
+        if prov_cfg is not None and prov_cfg.auth_mode == "x-api-key":
+            return {"x-api-key": plaintext_key}
+        return {"authorization": f"Bearer {plaintext_key}"}
+
     def _disable_key_decrypt_failed(self, db: Session, key: ApiKey) -> None:
         try:
             key.status = "decrypt_failed"
@@ -183,10 +224,12 @@ class Forwarder:
         json_body: Any | None,
         inbound_headers: dict[str, str],
         pinned_api_key_id: int | None = None,
+        provider: str = "firecrawl",
     ) -> ForwardResult:
         if self._master_key is None:
             raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
-        timeout = httpx.Timeout(self._config.firecrawl.timeout)
+        timeout = self._provider_timeout(provider)
+        base_url = self._provider_base_url(provider)
 
         last_upstream_status: int | None = None
         last_api_key_id: int | None = None
@@ -194,12 +237,12 @@ class Forwarder:
         headers = httpx.Headers(inbound_headers)
         safe_headers = _sanitized_request_headers(headers, request_id)
 
-        total_attempts = max(self._config.firecrawl.max_retries, 0) + 1
+        total_attempts = max(self._provider_max_retries(provider), 0) + 1
         retry_count = 0
 
         with httpx.Client(
             timeout=timeout,
-            base_url=self._firecrawl_upstream_base_url,
+            base_url=base_url,
             transport=self._transport,
             follow_redirects=False,
         ) as client_http:
@@ -231,6 +274,9 @@ class Forwarder:
                     raise FcamError(status_code=503, code="DB_UNAVAILABLE", message="Database unavailable") from exc
 
                 if pinned_key is None or (not pinned_key.is_active) or pinned_key.status == "disabled":
+                    pinned_api_key_id = None
+                elif pinned_key.provider != provider:
+                    # Provider mismatch: pinned key belongs to a different provider
                     pinned_api_key_id = None
                 else:
                     last_api_key_id = pinned_key.id
@@ -287,9 +333,10 @@ class Forwarder:
                                 ) from None
 
                             upstream_headers = dict(safe_headers)
-                            upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
+                            upstream_headers.update(self._provider_auth_header(provider, plaintext_api_key))
+                            auth_header_keys = {"authorization", "x-api-key"}
                             for hk in list(upstream_headers.keys()):
-                                if hk.lower() in _DROP_REQUEST_HEADERS and hk.lower() != "authorization":
+                                if hk.lower() in _DROP_REQUEST_HEADERS and hk.lower() not in auth_header_keys:
                                     upstream_headers.pop(hk, None)
 
                             resp = client_http.request(
@@ -457,7 +504,7 @@ class Forwarder:
             while upstream_attempts < total_attempts and selection_tries < max_selection_tries:
                 selection_tries += 1
                 try:
-                    selected = self._key_pool.select(db, self._config, client_id=client.id)
+                    selected = self._key_pool.select(db, self._config, client_id=client.id, provider=provider)
                 except FcamError as exc:
                     if decrypt_failed_seen and exc.code in {
                         "NO_KEY_CONFIGURED",
@@ -495,10 +542,11 @@ class Forwarder:
                         continue
 
                     upstream_headers = dict(safe_headers)
-                    upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
+                    upstream_headers.update(self._provider_auth_header(provider, plaintext_api_key))
 
+                    auth_header_keys = {"authorization", "x-api-key"}
                     for hk in list(upstream_headers.keys()):
-                        if hk.lower() in _DROP_REQUEST_HEADERS and hk.lower() != "authorization":
+                        if hk.lower() in _DROP_REQUEST_HEADERS and hk.lower() not in auth_header_keys:
                             upstream_headers.pop(hk, None)
 
                     resp = client_http.request(
@@ -699,10 +747,17 @@ class Forwarder:
         if self._master_key is None:
             raise FcamError(status_code=503, code="NOT_READY", message="Master key not configured")
 
+        provider = getattr(key, "provider", "firecrawl") or "firecrawl"
+
+        if provider == "exa":
+            if mode != "scrape":
+                raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported test mode")
+            return self._test_key_exa(db=db, request_id=request_id, key=key, provider=provider)
+
         if mode != "scrape":
             raise FcamError(status_code=400, code="VALIDATION_ERROR", message="Unsupported test mode")
 
-        timeout = httpx.Timeout(self._config.firecrawl.timeout)
+        timeout = self._provider_timeout(provider)
         headers = httpx.Headers({"x-request-id": request_id, "content-type": "application/json"})
 
         start = perf_counter()
@@ -721,11 +776,11 @@ class Forwarder:
                 )
 
             upstream_headers = dict(headers)
-            upstream_headers["authorization"] = f"Bearer {plaintext_api_key}"
+            upstream_headers.update(self._provider_auth_header(provider, plaintext_api_key))
 
             with httpx.Client(
                 timeout=timeout,
-                base_url=self._firecrawl_upstream_base_url,
+                base_url=self._provider_base_url(provider),
                 transport=self._transport,
                 follow_redirects=False,
             ) as client_http:
@@ -868,6 +923,100 @@ class Forwarder:
                 observed_status=key.status,
                 observed_cooldown_until=key.cooldown_until,
             )
+
+        return KeyTestResult(
+            ok=False,
+            upstream_status_code=resp.status_code,
+            latency_ms=latency_ms,
+            observed_status=key.status,
+            observed_cooldown_until=key.cooldown_until,
+        )
+
+    def _test_key_exa(
+        self,
+        *,
+        db: Session,
+        request_id: str,
+        key: ApiKey,
+        provider: str,
+    ) -> KeyTestResult:
+        """Test an Exa API key by calling POST /search with a simple query."""
+        timeout = self._provider_timeout(provider)
+        headers = httpx.Headers({"x-request-id": request_id, "content-type": "application/json"})
+
+        start = perf_counter()
+        try:
+            try:
+                plaintext_api_key = decrypt_api_key(self._master_key, key.api_key_ciphertext)
+            except (InvalidTag, ValueError):
+                self._disable_key_decrypt_failed(db, key)
+                latency_ms = int((perf_counter() - start) * 1000)
+                return KeyTestResult(
+                    ok=False,
+                    upstream_status_code=None,
+                    latency_ms=latency_ms,
+                    observed_status=key.status,
+                    observed_cooldown_until=key.cooldown_until,
+                )
+
+            upstream_headers = dict(headers)
+            upstream_headers.update(self._provider_auth_header(provider, plaintext_api_key))
+
+            with httpx.Client(
+                timeout=timeout,
+                base_url=self._provider_base_url(provider),
+                transport=self._transport,
+                follow_redirects=False,
+            ) as client_http:
+                resp = client_http.request(
+                    method="POST",
+                    url="/search",
+                    headers=upstream_headers,
+                    json={"query": "test", "numResults": 1},
+                )
+
+            latency_ms = int((perf_counter() - start) * 1000)
+
+        except httpx.TimeoutException:
+            self._record_failure(db, key, reason="timeout")
+            latency_ms = int((perf_counter() - start) * 1000)
+            return KeyTestResult(
+                ok=False,
+                upstream_status_code=None,
+                latency_ms=latency_ms,
+                observed_status=key.status,
+                observed_cooldown_until=key.cooldown_until,
+            )
+        except httpx.HTTPError:
+            self._record_failure(db, key, reason="http_error")
+            latency_ms = int((perf_counter() - start) * 1000)
+            return KeyTestResult(
+                ok=False,
+                upstream_status_code=None,
+                latency_ms=latency_ms,
+                observed_status=key.status,
+                observed_cooldown_until=key.cooldown_until,
+            )
+
+        if 200 <= resp.status_code < 300:
+            self._mark_active(db, key)
+            return KeyTestResult(
+                ok=True,
+                upstream_status_code=resp.status_code,
+                latency_ms=latency_ms,
+                observed_status=key.status,
+                observed_cooldown_until=key.cooldown_until,
+            )
+
+        if resp.status_code == 429:
+            cooldown = _parse_retry_after(resp.headers) or self._config.rate_limit.cooldown_seconds
+            self._mark_cooling(db, key, cooldown)
+
+        if resp.status_code in {401, 403}:
+            self._disable_key(db, key, resp.status_code)
+
+        if resp.status_code >= 500:
+            self._record_failure(db, key, reason="upstream_5xx")
 
         return KeyTestResult(
             ok=False,

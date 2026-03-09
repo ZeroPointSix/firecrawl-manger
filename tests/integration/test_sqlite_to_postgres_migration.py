@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -100,7 +100,7 @@ def test_migrate_sqlite_to_postgres_smoke(tmp_path, monkeypatch, postgres_url: s
     sqlite_engine = create_engine(f"sqlite:///{sqlite_path.as_posix()}", future=True)
 
     tables = Base.metadata.tables
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     with sqlite_engine.begin() as conn:
         conn.execute(
@@ -227,7 +227,7 @@ def test_migrate_sqlite_to_postgres_smoke(tmp_path, monkeypatch, postgres_url: s
                 daily_usage=0,
                 rate_limit_per_min=60,
                 max_concurrent=10,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             .returning(clients_table.c.id)
         ).scalar_one()

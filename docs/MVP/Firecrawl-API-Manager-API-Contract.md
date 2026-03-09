@@ -82,8 +82,8 @@
 - `error.message`：人类可读
 - `error.details`：可选，结构化信息（不包含敏感数据）
 
-### 1.6.1 数据面/兼容层错误体（/api/*、/v1/*、/v2/*，Firecrawl 兼容）
-> 说明：这些接口以 Firecrawl 兼容为目标：
+### 1.6.1 数据面/兼容层错误体（/api/*、/v1/*、/v2/*、/exa/*，兼容层）
+> 说明：这些接口以各 Provider 兼容为目标：
 > - **上游错误**：通常透传（不包装）
 > - **网关自身产生的错误**（鉴权/限流/配额/无 Key/校验失败等）：返回 Firecrawl 兼容结构（仍会在响应头带 `X-Request-Id`；429 类错误会带 `Retry-After`）
 
@@ -125,6 +125,10 @@
 ### 2.1 GET /admin/keys — 获取密钥列表
 **Auth**：Admin
 
+**Query Parameters（可选）**
+- `client_id`：按客户端过滤
+- `provider`：按 Provider 过滤（`firecrawl`、`exa`）
+
 **Response 200**
 ```json
 {
@@ -136,6 +140,7 @@
       "plan_type": "free",
       "is_active": true,
       "status": "active",
+      "provider": "firecrawl",
 
       "daily_quota": 5,
       "daily_usage": 3,
@@ -175,9 +180,11 @@
   "daily_quota": 5,
   "max_concurrent": 2,
   "rate_limit_per_min": 10,
-  "is_active": true
+  "is_active": true,
+  "provider": "firecrawl"
 }
 ```
+> `provider` 可选，默认 `"firecrawl"`。可选值：`"firecrawl"`、`"exa"`。
 
 **Response 201**
 返回新建 key（同 2.1 单项结构，不包含 `api_key` 明文）。
@@ -800,6 +807,37 @@
 - `POST /v2/batch/scrape/start` ↔ `POST /v2/batch/scrape`
 - `GET  /v2/batch/scrape/status/{id}` ↔ `GET /v2/batch/scrape/{id}`
 
+### 3.0.2 Exa 兼容层（/exa/*，P0 端点）
+**Auth**：Client（Bearer Token）
+
+说明：当 `providers.exa.enabled: true` 时，FCAM 额外提供一组与 Exa REST API 路径对齐的兼容端点。FCAM 会自动将客户端请求转发到 Exa 上游（`https://api.exa.ai`），并使用托管的 Exa API Key 进行鉴权（`x-api-key` 头）。
+
+客户端无需关心 Exa Key 管理，只需将 Exa SDK 的 `baseUrl` 指向 `{FCAM_BASE_URL}/exa` 即可。
+
+#### P0 端点（首版）
+
+| FCAM 路径 | 上游路径 | 方法 | 说明 |
+|-----------|---------|------|------|
+| `/exa/search` | `POST https://api.exa.ai/search` | POST | Exa 搜索 |
+| `/exa/findSimilar` | `POST https://api.exa.ai/findSimilar` | POST | 查找相似页面 |
+| `/exa/contents` | `POST https://api.exa.ai/contents` | POST | 获取内容 |
+| `/exa/answer` | `POST https://api.exa.ai/answer` | POST | Exa Answer（RAG） |
+
+#### Exa Key 管理
+
+通过控制面管理 Exa Key：
+- `POST /admin/keys` — 创建 Key 时指定 `"provider": "exa"`
+- `GET /admin/keys?provider=exa` — 按 provider 过滤
+- `POST /admin/keys/import-text` — 导入时指定 `"provider": "exa"`
+- `POST /admin/keys/{id}/test` — 自动使用 Exa 测试逻辑（`POST /search`）
+
+#### 限制
+
+- Exa Key **不支持** credits 查询（返回 `UNSUPPORTED_PROVIDER_OPERATION`）
+- mixed-provider 批量 test **被拒绝**（需按 provider 分开执行）
+- 首版不开放通配符 `/exa/{path:path}`，仅允许上述 4 个白名单路径
+- Exa Research / Websets 等非 P0 端点暂不支持
+
 ### 3.1 POST /api/scrape → 上游 POST {base_url}/v1/scrape
 **Auth**：Client
 
@@ -873,4 +911,5 @@ fcam_requests_total{endpoint="scrape",method="POST",status_code="200",client_id=
 - 幂等（补充）：`IDEMPOTENCY_IN_PROGRESS`
 - 依赖不可用：`NOT_READY`、`DB_UNAVAILABLE`
 - 上游类：`UPSTREAM_TIMEOUT`、`UPSTREAM_UNAVAILABLE`
+- Provider 类：`UNSUPPORTED_PROVIDER_OPERATION`（Exa Key 不支持的操作，如 credits）、`MIXED_PROVIDER_BATCH`（mixed-provider 批量 test 被拒绝）
 - 通用：`VALIDATION_ERROR`、`NOT_FOUND`、`INTERNAL_ERROR`

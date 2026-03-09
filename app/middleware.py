@@ -38,12 +38,19 @@ def _infer_api_endpoint(path: str) -> str | None:
         prefix = "/v1/"
     elif path.startswith("/v2/"):
         prefix = "/v2/"
+    elif path.startswith("/exa/"):
+        prefix = "/exa/"
     else:
         return None
 
     suffix = path[len(prefix) :].strip("/")
     if not suffix:
         return "unknown"
+
+    if prefix == "/exa/":
+        first = suffix.split("/", 1)[0]
+        endpoint = f"exa_{first[:32]}" if first else "unknown"
+        return endpoint or "unknown"
 
     first, *rest = suffix.split("/", 1)
     if first == "crawl":
@@ -297,10 +304,11 @@ class FcamErrorMiddleware(BaseHTTPMiddleware):
 
 
 class RequestLimitsMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, *, max_body_bytes: int, allowed_api_paths: set[str]):
+    def __init__(self, app, *, max_body_bytes: int, allowed_api_paths: set[str], allowed_exa_paths: set[str] | None = None):
         super().__init__(app)
         self._max_body_bytes = max_body_bytes
         self._allowed_api_paths = {p.strip("/") for p in allowed_api_paths}
+        self._allowed_exa_paths = {p.strip("/") for p in (allowed_exa_paths or set())}
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         path = request.url.path
@@ -316,6 +324,11 @@ class RequestLimitsMiddleware(BaseHTTPMiddleware):
         if api_prefix is not None:
             seg = path[len(api_prefix) :].split("/", 1)[0]
             if seg not in self._allowed_api_paths:
+                raise FcamError(status_code=404, code="PATH_NOT_ALLOWED", message="Path not allowed")
+
+        if path.startswith("/exa/") and self._allowed_exa_paths:
+            seg = path[len("/exa/") :].split("/", 1)[0]
+            if seg not in self._allowed_exa_paths:
                 raise FcamError(status_code=404, code="PATH_NOT_ALLOWED", message="Path not allowed")
 
         if request.method not in {"GET", "HEAD"}:

@@ -97,3 +97,13 @@ state:
 control_plane:
   # 批量 key test 的并发上限（用于避免大量 keys 顺序测试导致请求/前端超时）
   batch_key_test_max_workers: 10
+
+providers:
+  exa:
+    enabled: false
+    base_url: "https://api.exa.ai"
+    auth_mode: "x-api-key"
+    timeout: 30
+    max_retries: 3
+    route_prefix: "/exa"
+    allowed_paths: ["search", "findSimilar", "contents", "answer"]

@@ -2,11 +2,6 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-
-def _utc_now() -> datetime:
-    """返回当前 UTC 时间（timezone-aware）"""
-    return datetime.now(timezone.utc)
-
 from sqlalchemy import (
     Boolean,
     Date,
@@ -19,6 +14,11 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+def _utc_now() -> datetime:
+    """返回当前 UTC 时间（timezone-aware）"""
+    return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
@@ -68,6 +68,8 @@ class ApiKey(Base):
     cached_remaining_credits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cached_plan_credits: Mapped[int | None] = mapped_column(Integer, nullable=True)
     next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="firecrawl", index=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
 

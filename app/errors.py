@@ -95,7 +95,7 @@ def _firecrawl_json_error(
 
 
 def _is_proxy_path(path: str) -> bool:
-    return path.startswith("/api/") or path.startswith("/v1/") or path.startswith("/v2/")
+    return path.startswith("/api/") or path.startswith("/v1/") or path.startswith("/v2/") or path.startswith("/exa/")
 
 
 def is_proxy_path(path: str) -> bool:

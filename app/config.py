@@ -136,7 +136,7 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
     format: str = "json"  # json | plain
     redact_fields: list[str] = Field(
-        default_factory=lambda: ["authorization", "api_key", "token", "cookie", "set-cookie"]
+        default_factory=lambda: ["authorization", "api_key", "x-api-key", "token", "cookie", "set-cookie"]
     )
 
 
@@ -165,9 +165,41 @@ class ControlPlaneConfig(BaseModel):
     batch_key_test_max_workers: int = 10
 
 
+class ProviderConfig(BaseModel):
+    """Per-provider configuration."""
+    enabled: bool = True
+    base_url: str
+    auth_mode: str = "bearer"  # bearer | x-api-key
+    timeout: int = 30
+    max_retries: int = 3
+    route_prefix: str = ""
+    allowed_paths: list[str] = Field(default_factory=list)
+
+    @field_validator("base_url")
+    @classmethod
+    def _normalize_base_url(cls, v: str) -> str:
+        normalized = v.strip()
+        if not normalized:
+            raise ValueError("provider base_url must not be empty")
+        return normalized.rstrip("/")
+
+
+class ProvidersConfig(BaseModel):
+    exa: ProviderConfig = Field(default_factory=lambda: ProviderConfig(
+        enabled=False,
+        base_url="https://api.exa.ai",
+        auth_mode="x-api-key",
+        timeout=30,
+        max_retries=3,
+        route_prefix="/exa",
+        allowed_paths=["search", "findSimilar", "contents", "answer"],
+    ))
+
+
 class AppConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     firecrawl: FirecrawlConfig = Field(default_factory=FirecrawlConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     quota: QuotaConfig = Field(default_factory=QuotaConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)

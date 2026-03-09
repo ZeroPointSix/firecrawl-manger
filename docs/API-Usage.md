@@ -6,8 +6,8 @@
 
 ### 0.1 两个平面
 
-- **数据面**：`/api/*` —— 给业务服务调用，用 **Client Token** 鉴权；FCAM 会在内部选择并使用某把 Firecrawl Key 进行转发。
-- **控制面**：`/admin/*` —— 给运维/管理员使用，用 **Admin Token** 鉴权；用于管理 Firecrawl Key 池、发放/轮换 Client Token、查询日志等。
+- **数据面**：`/api/*`、`/v1/*`、`/v2/*`、`/exa/*` —— 给业务服务调用，用 **Client Token** 鉴权；FCAM 会在内部选择并使用某把 API Key 进行转发（Firecrawl 或 Exa，取决于路由前缀）。
+- **控制面**：`/admin/*` —— 给运维/管理员使用，用 **Admin Token** 鉴权；用于管理 API Key 池（支持多 Provider）、发放/轮换 Client Token、查询日志等。
 
 ### 0.2 两种 Token
 
@@ -17,7 +17,7 @@
 ### 0.3 Master Key（必须稳定）
 
 环境变量 `FCAM_MASTER_KEY` 用于：
-- 加密落库 Firecrawl API Key
+- 加密落库 API Key（Firecrawl 和 Exa）
 - 哈希存储 Client Token（用于鉴权）
 
 **不要随意更换 `FCAM_MASTER_KEY`**：更换会导致旧的 Firecrawl Key 无法解密、旧的 Client Token 无法通过鉴权（相当于“全量失效”）。
@@ -83,6 +83,7 @@ $body=@{
   max_concurrent=2
   rate_limit_per_min=10
   is_active=$true
+  provider="firecrawl"   # 可选，默认 "firecrawl"；创建 Exa key 时传 "exa"
 } | ConvertTo-Json
 
 Invoke-RestMethod -Method POST -Uri "$origin/admin/keys" -Headers $h -ContentType "application/json" -Body $body
@@ -226,6 +227,21 @@ v2 别名（为兼容文档/SDK 的 `start/status` 形态，FCAM 会自动重写
 注意：
 - 鉴权仍然是 `Authorization: Bearer <CLIENT_TOKEN>`（**不是** Firecrawl Key）。
 - v1 兼容层当前只覆盖上述端点；v2 兼容层为 `/v2/*` 透明转发（除少量别名重写外）。
+
+### 4.1.2 Exa 原生 API 兼容路径
+
+FCAM 同时提供一组 **兼容 Exa API** 的转发端点（需在 `config.yaml` 中启用 `providers.exa.enabled: true`）：
+
+- `POST /exa/search` —— Exa 搜索
+- `POST /exa/findSimilar` —— 相似内容查找
+- `POST /exa/contents` —— 内容获取
+- `POST /exa/answer` —— 智能问答
+
+注意：
+- 鉴权仍然是 `Authorization: Bearer <CLIENT_TOKEN>`（不是 Exa API Key）。
+- FCAM 内部自动将 Client Token 映射到 `provider=exa` 的 Key 池，使用 `x-api-key` 头与上游 Exa 通信。
+- 需要先通过 `POST /admin/keys` 创建 `provider: "exa"` 的 Key。
+- Exa Key 不支持额度监控（credits）功能。
 
 ### 4.2 scrape（单次抓取，通常同步返回）
 
