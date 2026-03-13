@@ -105,7 +105,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: 构建并推送 Docker 镜像
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@v7
       with:
         context: .
         push: true
