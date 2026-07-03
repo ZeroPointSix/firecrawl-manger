@@ -24,7 +24,7 @@ jobs:
           fetch-depth: 0
 
       - name: 执行 SonarCloud 扫描
-        uses: sonarsource/sonarqube-scan-action@v5
+        uses: sonarsource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
